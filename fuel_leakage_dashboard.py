@@ -2,6 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+from supabase import create_client, Client
+
+# Supabase connection setup
+SUPABASE_URL = "https://pyanhlpwloofwzpulcpi.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5YW5obHB3bG9vZnd6cHVsY3BpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3NjQyMzcsImV4cCI6MjA3ODM0MDIzN30.vUydKFP8kPOudO1bup4z1JYCYrWAMrI6RZol0pvQiCw"  # replace with your anon key from Supabase API
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.set_page_config(page_title="Fuel Leakage Dashboard", layout="wide")
 st.title("⛽ Fuel Leakage Detection & Efficiency Dashboard")
@@ -42,18 +48,20 @@ def simulate_data():
     df["leakage_cost"]=(df.actual_fuel_liters-df.expected_fuel_liters)*df.diesel_price_per_liter
     return df
 
-if upload:
-    df=pd.read_csv(upload,parse_dates=["trip_date"])
-else:
-    try:
-        df=pd.read_csv("processed_trips.csv",parse_dates=["trip_date"])
-        st.sidebar.success("Loaded local processed_trips.csv")
-    except:
-        if generate:
-            df=simulate_data()
-        else:
-            st.info("👈 Upload your processed_trips.csv or click Generate Sample Data")
-            st.stop()
+# --- Fetch Data from Supabase instead of CSV upload ---
+try:
+    response = supabase.table("trip_data").select("*").execute()
+    df = pd.DataFrame(response.data)
+
+    if df.empty:
+        st.warning("⚠️ No data found in Supabase 'trip_data' table.")
+        st.stop()
+    else:
+        st.sidebar.success("✅ Data loaded from Supabase successfully!")
+
+except Exception as e:
+    st.error(f"❌ Failed to fetch data from Supabase: {e}")
+    st.stop()
 
 total=len(df)
 avgv=df["variance_pct"].mean()
@@ -92,3 +100,6 @@ st.subheader("🧭 Trip Details")
 st.dataframe(df)
 st.download_button("💾 Download Leakage Report (CSV)",
                    df.to_csv(index=False),"leakage_report.csv","text/csv")
+
+
+
