@@ -22,19 +22,26 @@ upload = st.sidebar.file_uploader("📂 Upload processed_trips.csv", type=["csv"
 generate = st.sidebar.button("🚀 Generate Sample Data")
 
 # -------------------------------
-# Upload CSV → Insert into Supabase
+# Upload CSV → Calculate → Insert into Supabase
 # -------------------------------
 if upload is not None:
     df = pd.read_csv(upload)
     st.write("📊 Uploaded file preview:", df.head())
 
+    # ✅ Step 1: Calculate Profit/Loss before uploading
+    revenue_per_km = 150
+    df["expected_revenue"] = df["distance_km"] * revenue_per_km
+    df["fuel_cost"] = df["actual_fuel_liters"] * df["diesel_price_per_liter"]
+    df["profit_loss"] = df["expected_revenue"] - df["fuel_cost"]
+    df["pnl_status"] = np.where(df["profit_loss"] > 0, "Profit", "Loss")
+
     try:
-        # Optional: Delete old data to avoid duplicates
+        # ✅ Step 2: Clear old records before new upload
         supabase.table("trip_data").delete().neq("trip_id", "").execute()
 
-        # Insert new CSV data into Supabase
+        # ✅ Step 3: Upload full data (including calculated columns)
         supabase.table("trip_data").insert(df.to_dict(orient="records")).execute()
-        st.success("✅ Data uploaded to Supabase successfully!")
+        st.success("✅ Data uploaded to Supabase successfully (with Profit/Loss)!")
     except Exception as e:
         st.error(f"❌ Failed to upload data to Supabase: {e}")
 
@@ -56,19 +63,7 @@ except Exception as e:
     st.stop()
 
 # -------------------------------
-# Profit/Loss Calculation
-# -------------------------------
-# Revenue per km (you can adjust)
-revenue_per_km = 150
-
-# Add profit/loss related columns
-df["expected_revenue"] = df["distance_km"] * revenue_per_km
-df["fuel_cost"] = df["actual_fuel_liters"] * df["diesel_price_per_liter"]
-df["profit_loss"] = df["expected_revenue"] - df["fuel_cost"]
-df["pnl_status"] = np.where(df["profit_loss"] > 0, "Profit", "Loss")
-
-# -------------------------------
-# Calculations
+# Leakage + PNL Calculations
 # -------------------------------
 total = len(df)
 avgv = df["variance_pct"].mean()
@@ -91,7 +86,6 @@ c3.metric("Total Leakage (L)", f"{leak_l:.1f}")
 c4.metric("Leakage Cost (₹)", f"{leak_cost:,.0f}")
 c5.metric("% Trips Leakage", f"{pct:.1%}")
 
-# Profit KPIs
 st.divider()
 c6, c7 = st.columns(2)
 c6.metric("💰 Total Profit/Loss (₹)", f"{total_profit:,.0f}")
