@@ -22,13 +22,18 @@ upload = st.sidebar.file_uploader("📂 Upload processed_trips.csv", type=["csv"
 generate = st.sidebar.button("🚀 Generate Sample Data")
 
 # -------------------------------
-# Upload CSV → Calculate → Insert into Supabase
+# Upload CSV → Clean → Calculate → Insert into Supabase
 # -------------------------------
 if upload is not None:
     df = pd.read_csv(upload)
     st.write("📊 Uploaded file preview:", df.head())
 
-    # ✅ Step 1: Calculate Profit/Loss before uploading
+    # ✅ Step 1: Clean Data — Remove incomplete rows
+    required_cols = ["distance_km", "actual_fuel_liters", "diesel_price_per_liter"]
+    df = df.dropna(subset=required_cols)
+    df[required_cols] = df[required_cols].replace("", 0)
+
+    # ✅ Step 2: Calculate Profit/Loss before uploading
     revenue_per_km = 150
     df["expected_revenue"] = df["distance_km"] * revenue_per_km
     df["fuel_cost"] = df["actual_fuel_liters"] * df["diesel_price_per_liter"]
@@ -36,10 +41,10 @@ if upload is not None:
     df["pnl_status"] = np.where(df["profit_loss"] > 0, "Profit", "Loss")
 
     try:
-        # ✅ Step 2: Clear old records before new upload
+        # ✅ Step 3: Clear old records before new upload
         supabase.table("trip_data").delete().neq("trip_id", "").execute()
 
-        # ✅ Step 3: Upload full data (including calculated columns)
+        # ✅ Step 4: Upload clean data (with PNL columns)
         supabase.table("trip_data").insert(df.to_dict(orient="records")).execute()
         st.success("✅ Data uploaded to Supabase successfully (with Profit/Loss)!")
     except Exception as e:
