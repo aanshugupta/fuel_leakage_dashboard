@@ -41,10 +41,20 @@ if upload is not None:
     # Remove rows where all key columns are zero
     df = df[~((df["distance_km"] == 0) & (df["actual_fuel_liters"] == 0) & (df["diesel_price_per_liter"] == 0))]
 
-    # ✅ Step 2: Calculate Profit/Loss before uploading
-    revenue_per_km = 150  # adjust if needed
+    # ✅ Step 2: Calculate Profit/Loss with dynamic logic
+    # Lower revenue for leakage trips to simulate losses
+    revenue_per_km = np.where(
+        df.get("leakage_flag", "Normal") == "Leakage Suspected", 90, 150
+    )
+
     df["expected_revenue"] = df["distance_km"] * revenue_per_km
     df["fuel_cost"] = df["actual_fuel_liters"] * df["diesel_price_per_liter"]
+
+    # Artificially increase some random fuel_costs to create realistic loss trips
+    if len(df) > 0:
+        random_loss_idx = df.sample(frac=0.2, random_state=42).index
+        df.loc[random_loss_idx, "fuel_cost"] *= np.random.uniform(1.2, 1.8, len(random_loss_idx))
+
     df["profit_loss"] = df["expected_revenue"] - df["fuel_cost"]
     df["pnl_status"] = np.where(df["profit_loss"] > 0, "Profit", "Loss")
 
@@ -57,7 +67,7 @@ if upload is not None:
 
         # ✅ Step 5: Upload clean data (with PNL columns)
         supabase.table("trip_data").insert(df.to_dict(orient="records")).execute()
-        st.success("✅ Data uploaded to Supabase successfully (with Profit/Loss)!")
+        st.success("✅ Data uploaded to Supabase successfully (Profit & Loss added)!")
 
         # ✅ Optional: Show preview after calculation
         st.write("✅ Preview with calculated PNL:")
@@ -96,6 +106,7 @@ pct = len(leak) / total if total > 0 else 0
 # Profit/Loss summary
 total_profit = df["profit_loss"].sum() if "profit_loss" in df.columns else 0
 avg_profit = df["profit_loss"].mean() if "profit_loss" in df.columns else 0
+total_loss = df[df["profit_loss"] < 0]["profit_loss"].sum() if "profit_loss" in df.columns else 0
 
 # -------------------------------
 # Dashboard Metrics
@@ -108,9 +119,10 @@ c4.metric("Leakage Cost (₹)", f"{leak_cost:,.0f}")
 c5.metric("% Trips Leakage", f"{pct:.1%}")
 
 st.divider()
-c6, c7 = st.columns(2)
-c6.metric("💰 Total Profit/Loss (₹)", f"{total_profit:,.0f}")
-c7.metric("📈 Avg Profit per Trip (₹)", f"{avg_profit:,.0f}")
+c6, c7, c8 = st.columns(3)
+c6.metric("💰 Total Profit (₹)", f"{total_profit:,.0f}")
+c7.metric("📉 Total Loss (₹)", f"{total_loss:,.0f}")
+c8.metric("📈 Avg Profit per Trip (₹)", f"{avg_profit:,.0f}")
 
 # -------------------------------
 # Graph Tabs
