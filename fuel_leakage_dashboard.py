@@ -15,7 +15,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Streamlit Page Setup
 # -------------------------------
 st.set_page_config(page_title="Fuel Leakage Dashboard", layout="wide")
-st.title("⛽ Fuel Leakage Detection & Efficiency Dashboard")
+st.title("⛽ Fuel Leakage Detection, Efficiency & PNL Dashboard")
 
 st.sidebar.header("⚙️ Data Input")
 upload = st.sidebar.file_uploader("📂 Upload processed_trips.csv", type=["csv"])
@@ -56,6 +56,18 @@ except Exception as e:
     st.stop()
 
 # -------------------------------
+# Profit/Loss Calculation
+# -------------------------------
+# Revenue per km (you can adjust)
+revenue_per_km = 150
+
+# Add profit/loss related columns
+df["expected_revenue"] = df["distance_km"] * revenue_per_km
+df["fuel_cost"] = df["actual_fuel_liters"] * df["diesel_price_per_liter"]
+df["profit_loss"] = df["expected_revenue"] - df["fuel_cost"]
+df["pnl_status"] = np.where(df["profit_loss"] > 0, "Profit", "Loss")
+
+# -------------------------------
 # Calculations
 # -------------------------------
 total = len(df)
@@ -64,6 +76,10 @@ leak = df[df.leakage_flag == "Leakage Suspected"]
 leak_l = max((leak.actual_fuel_liters - leak.expected_fuel_liters).sum(), 0)
 leak_cost = max(leak["leakage_cost"].sum(), 0)
 pct = len(leak) / total if total > 0 else 0
+
+# Profit/Loss summary
+total_profit = df["profit_loss"].sum()
+avg_profit = df["profit_loss"].mean()
 
 # -------------------------------
 # Dashboard Metrics
@@ -75,16 +91,23 @@ c3.metric("Total Leakage (L)", f"{leak_l:.1f}")
 c4.metric("Leakage Cost (₹)", f"{leak_cost:,.0f}")
 c5.metric("% Trips Leakage", f"{pct:.1%}")
 
+# Profit KPIs
+st.divider()
+c6, c7 = st.columns(2)
+c6.metric("💰 Total Profit/Loss (₹)", f"{total_profit:,.0f}")
+c7.metric("📈 Avg Profit per Trip (₹)", f"{avg_profit:,.0f}")
+
 # -------------------------------
 # Graph Tabs
 # -------------------------------
 st.divider()
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Actual vs Expected", 
-    "Leakage Pie", 
-    "Cost by Driver", 
-    "Variance Trend", 
-    "Distance vs Fuel"
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "Actual vs Expected",
+    "Leakage Pie",
+    "Cost by Driver",
+    "Variance Trend",
+    "Distance vs Fuel",
+    "Profit & Loss Chart"
 ])
 
 with tab1:
@@ -116,6 +139,12 @@ with tab5:
         title="Distance vs Fuel"
     ), use_container_width=True)
 
+with tab6:
+    st.plotly_chart(px.bar(
+        df, x="trip_id", y="profit_loss", color="pnl_status",
+        title="Profit vs Loss per Trip"
+    ), use_container_width=True)
+
 # -------------------------------
 # Data Table + Download
 # -------------------------------
@@ -123,6 +152,6 @@ st.divider()
 st.subheader("🧭 Trip Details")
 st.dataframe(df)
 st.download_button(
-    "💾 Download Leakage Report (CSV)",
-    df.to_csv(index=False), "leakage_report.csv", "text/csv"
+    "💾 Download Leakage & PNL Report (CSV)",
+    df.to_csv(index=False), "leakage_pnl_report.csv", "text/csv"
 )
