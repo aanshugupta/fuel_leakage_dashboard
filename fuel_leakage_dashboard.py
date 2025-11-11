@@ -28,25 +28,41 @@ if upload is not None:
     df = pd.read_csv(upload)
     st.write("📊 Uploaded file preview:", df.head())
 
-    # ✅ Step 1: Clean Data — Remove incomplete rows
+    # ✅ Step 1: Clean Data — handle missing & invalid values
     required_cols = ["distance_km", "actual_fuel_liters", "diesel_price_per_liter"]
-    df = df.dropna(subset=required_cols)
-    df[required_cols] = df[required_cols].replace("", 0)
+    for col in required_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # Assume diesel price = 95 if missing (optional fix)
+    if "diesel_price_per_liter" in df.columns:
+        df.loc[df["diesel_price_per_liter"] == 0, "diesel_price_per_liter"] = 95
+
+    # Remove rows where all key columns are zero
+    df = df[~((df["distance_km"] == 0) & (df["actual_fuel_liters"] == 0) & (df["diesel_price_per_liter"] == 0))]
 
     # ✅ Step 2: Calculate Profit/Loss before uploading
-    revenue_per_km = 150
+    revenue_per_km = 150  # adjust if needed
     df["expected_revenue"] = df["distance_km"] * revenue_per_km
     df["fuel_cost"] = df["actual_fuel_liters"] * df["diesel_price_per_liter"]
     df["profit_loss"] = df["expected_revenue"] - df["fuel_cost"]
     df["pnl_status"] = np.where(df["profit_loss"] > 0, "Profit", "Loss")
 
+    # ✅ Step 3: Remove rows where both revenue and cost are 0
+    df = df[~((df["expected_revenue"] == 0) & (df["fuel_cost"] == 0))]
+
     try:
-        # ✅ Step 3: Clear old records before new upload
+        # ✅ Step 4: Clear old records before new upload
         supabase.table("trip_data").delete().neq("trip_id", "").execute()
 
-        # ✅ Step 4: Upload clean data (with PNL columns)
+        # ✅ Step 5: Upload clean data (with PNL columns)
         supabase.table("trip_data").insert(df.to_dict(orient="records")).execute()
         st.success("✅ Data uploaded to Supabase successfully (with Profit/Loss)!")
+
+        # ✅ Optional: Show preview after calculation
+        st.write("✅ Preview with calculated PNL:")
+        st.dataframe(df.head())
+
     except Exception as e:
         st.error(f"❌ Failed to upload data to Supabase: {e}")
 
@@ -71,15 +87,15 @@ except Exception as e:
 # Leakage + PNL Calculations
 # -------------------------------
 total = len(df)
-avgv = df["variance_pct"].mean()
-leak = df[df.leakage_flag == "Leakage Suspected"]
-leak_l = max((leak.actual_fuel_liters - leak.expected_fuel_liters).sum(), 0)
-leak_cost = max(leak["leakage_cost"].sum(), 0)
+avgv = df["variance_pct"].mean() if "variance_pct" in df.columns else 0
+leak = df[df["leakage_flag"] == "Leakage Suspected"] if "leakage_flag" in df.columns else pd.DataFrame()
+leak_l = max((leak["actual_fuel_liters"] - leak["expected_fuel_liters"]).sum(), 0) if not leak.empty else 0
+leak_cost = max(leak["leakage_cost"].sum(), 0) if "leakage_cost" in df.columns else 0
 pct = len(leak) / total if total > 0 else 0
 
 # Profit/Loss summary
-total_profit = df["profit_loss"].sum()
-avg_profit = df["profit_loss"].mean()
+total_profit = df["profit_loss"].sum() if "profit_loss" in df.columns else 0
+avg_profit = df["profit_loss"].mean() if "profit_loss" in df.columns else 0
 
 # -------------------------------
 # Dashboard Metrics
@@ -110,39 +126,45 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 ])
 
 with tab1:
-    st.plotly_chart(px.bar(
-        df, x="trip_id", y=["expected_fuel_liters", "actual_fuel_liters"],
-        title="Actual vs Expected Fuel", barmode="group"
-    ), use_container_width=True)
+    if "expected_fuel_liters" in df.columns and "actual_fuel_liters" in df.columns:
+        st.plotly_chart(px.bar(
+            df, x="trip_id", y=["expected_fuel_liters", "actual_fuel_liters"],
+            title="Actual vs Expected Fuel", barmode="group"
+        ), use_container_width=True)
 
 with tab2:
-    st.plotly_chart(px.pie(
-        df, names="leakage_flag", title="Leakage Categories"
-    ), use_container_width=True)
+    if "leakage_flag" in df.columns:
+        st.plotly_chart(px.pie(
+            df, names="leakage_flag", title="Leakage Categories"
+        ), use_container_width=True)
 
 with tab3:
-    tmp = df.groupby("driver_id")["leakage_cost"].sum().reset_index()
-    st.plotly_chart(px.bar(
-        tmp, x="driver_id", y="leakage_cost", title="Leakage Cost per Driver"
-    ), use_container_width=True)
+    if "driver_id" in df.columns and "leakage_cost" in df.columns:
+        tmp = df.groupby("driver_id")["leakage_cost"].sum().reset_index()
+        st.plotly_chart(px.bar(
+            tmp, x="driver_id", y="leakage_cost", title="Leakage Cost per Driver"
+        ), use_container_width=True)
 
 with tab4:
-    trend = df.groupby("trip_date")["variance_pct"].mean().reset_index()
-    st.plotly_chart(px.line(
-        trend, x="trip_date", y="variance_pct", title="Variance Trend"
-    ), use_container_width=True)
+    if "trip_date" in df.columns and "variance_pct" in df.columns:
+        trend = df.groupby("trip_date")["variance_pct"].mean().reset_index()
+        st.plotly_chart(px.line(
+            trend, x="trip_date", y="variance_pct", title="Variance Trend"
+        ), use_container_width=True)
 
 with tab5:
-    st.plotly_chart(px.scatter(
-        df, x="distance_km", y="actual_fuel_liters", color="leakage_flag",
-        title="Distance vs Fuel"
-    ), use_container_width=True)
+    if "distance_km" in df.columns and "actual_fuel_liters" in df.columns:
+        st.plotly_chart(px.scatter(
+            df, x="distance_km", y="actual_fuel_liters", color="leakage_flag" if "leakage_flag" in df.columns else None,
+            title="Distance vs Fuel"
+        ), use_container_width=True)
 
 with tab6:
-    st.plotly_chart(px.bar(
-        df, x="trip_id", y="profit_loss", color="pnl_status",
-        title="Profit vs Loss per Trip"
-    ), use_container_width=True)
+    if "profit_loss" in df.columns and "pnl_status" in df.columns:
+        st.plotly_chart(px.bar(
+            df, x="trip_id", y="profit_loss", color="pnl_status",
+            title="Profit vs Loss per Trip"
+        ), use_container_width=True)
 
 # -------------------------------
 # Data Table + Download
