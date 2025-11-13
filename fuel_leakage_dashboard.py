@@ -1,34 +1,59 @@
-import streamlit as st
+ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 from supabase import create_client, Client
+import google.generativeai as genai   # GEMINI AI
 
-# -------------------------------
+# -------------------------------------------------
+# GEMINI AI CONFIG
+# -------------------------------------------------
+GEN_AI_KEY = "AIzaSyAt14MnFLF1bJ9yhNbMP_JhMjJf__pzwKg"   # <--- PUT YOUR API KEY
+genai.configure(api_key=GEN_AI_KEY)
+model = genai.GenerativeModel("gemini-pro")
+
+# -------------------------------------------------
 # Supabase Setup
-# -------------------------------
+# -------------------------------------------------
 SUPABASE_URL = "https://pyanhlpwloofwzpulcpi.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB5YW5obHB3bG9vZnd6cHVsY3BpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI3NjQyMzcsImV4cCI6MjA3ODM0MDIzN30.vUydKFP8kPOudO1bup4z1JYCYrWAMrI6RZol0pvQiCw"
+SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# -------------------------------
+# -------------------------------------------------
 # Streamlit Page Setup
-# -------------------------------
-st.set_page_config(page_title="Fuel Leakage Dashboard", layout="wide")
-st.title("⛽ Fuel Leakage Detection, Efficiency & Profit/Loss Dashboard")
+# -------------------------------------------------
+st.set_page_config(page_title="Fuel Leakage Dashboard + AI", layout="wide")
+st.title("⛽ Fuel Leakage Detection + AI Assistant Dashboard")
 
-upload = st.sidebar.file_uploader("📂 Upload processed_trips.csv", type=["csv"])
+upload = st.sidebar.file_uploader("📂 Upload processed_trips file", type=["csv", "xlsx"])
 
-# -------------------------------
+# -------------------------------------------------
+# AI CHATBOT (SIDEBAR)
+# -------------------------------------------------
+st.sidebar.subheader("🤖 Gemini AI Assistant")
+user_q = st.sidebar.text_input("Ask anything…")
+
+if st.sidebar.button("Ask AI"):
+    if user_q.strip() != "":
+        ai_answer = model.generate_content(user_q)
+        st.sidebar.success(ai_answer.text)
+    else:
+        st.sidebar.warning("Please enter a question")
+
+# -------------------------------------------------
 # When File Uploaded
-# -------------------------------
+# -------------------------------------------------
 if upload:
-    df = pd.read_csv(upload)
+
+    # AUTO Detect CSV / XLSX
+    if upload.name.endswith(".csv"):
+        df = pd.read_csv(upload)
+    else:
+        df = pd.read_excel(upload)
+
     st.write("📊 Uploaded File Preview:", df.head())
 
-    # -------------------------------
-    # Step 1: Ensure all required columns exist
-    # -------------------------------
+    # Ensure required columns
     required_cols = [
         "trip_id", "distance_km", "actual_fuel_liters",
         "diesel_price_per_liter", "leakage_flag"
@@ -37,34 +62,29 @@ if upload:
         if col not in df.columns:
             df[col] = 0
 
-    # -------------------------------
-    # Step 2: Convert numeric safely
-    # -------------------------------
+    # Safe numeric conversion
     for col in ["distance_km", "actual_fuel_liters", "diesel_price_per_liter"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # Replace 0 diesel price with default 95
     df.loc[df["diesel_price_per_liter"] == 0, "diesel_price_per_liter"] = 95
     df.loc[df["leakage_flag"] == 0, "leakage_flag"] = "Normal"
 
-    # -------------------------------
-    # Step 3: Clean empty rows
-    # -------------------------------
+    # Remove empty rows
     df = df[(df["distance_km"] > 0) & (df["actual_fuel_liters"] > 0)]
 
-    # -------------------------------
-    # ✅ Step 4: Calculate Route, Total Liters & Profit/Loss
-    # -------------------------------
+    # ----- Route + Mileage -----
     if "avg_mileage" not in df.columns:
-        df["avg_mileage"] = 3  # Default average mileage (km per liter)
+        df["avg_mileage"] = 3
 
     df["route_km"] = df["distance_km"]
-    df["total_liters"] = np.where(df["avg_mileage"] > 0, df["route_km"] / df["avg_mileage"], 0)
+    df["total_liters"] = df["route_km"] / df["avg_mileage"]
 
+    # ----- Profit Loss -----
     df["revenue_per_km"] = np.where(df["leakage_flag"] == "Leakage Suspected", 90, 150)
     df["expected_revenue"] = df["distance_km"] * df["revenue_per_km"]
     df["fuel_cost"] = df["actual_fuel_liters"] * df["diesel_price_per_liter"]
 
+    # Add random loss
     if len(df) > 0:
         loss_rows = df.sample(frac=0.25, random_state=42).index
         df.loc[loss_rows, "fuel_cost"] *= np.random.uniform(1.2, 1.8, len(loss_rows))
@@ -74,64 +94,49 @@ if upload:
 
     df = df.fillna(0)
 
-    # -------------------------------
-    # Step 5: Show on UI (before upload)
-    # -------------------------------
-    st.success("✅ Cleaned and Calculated Data Ready!")
-    st.dataframe(df.head(15))
+    # ----- Show Clean Data -----
+    st.success("✅ Data cleaned & calculated!")
+    st.dataframe(df.head(20))
 
-    # -------------------------------
-    # Step 6: Upload to Supabase
-    # -------------------------------
+    # ----- Upload to Supabase -----
     try:
         supabase.table("trip_data").delete().neq("trip_id", "").execute()
         supabase.table("trip_data").insert(df.to_dict(orient="records")).execute()
-        st.success("🚀 Data uploaded to Supabase successfully!")
+        st.success("🚀 Uploaded to Supabase!")
     except Exception as e:
         st.error(f"❌ Upload error: {e}")
 
-    # -------------------------------
-    # Step 7: Dashboard Overview
-    # -------------------------------
+    # ----- Metrics -----
     total_trips = len(df)
     total_profit = df[df["pnl_status"] == "Profit"]["profit_loss"].sum()
     total_loss = abs(df[df["pnl_status"] == "Loss"]["profit_loss"].sum())
     avg_profit = df["profit_loss"].mean()
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Total Trips", total_trips)
-    c2.metric("💰 Total Profit (₹)", f"{total_profit:,.0f}")
-    c3.metric("📉 Total Loss (₹)", f"{total_loss:,.0f}")
-    c4.metric("⚙️ Avg Profit per Trip (₹)", f"{avg_profit:,.0f}")
+    c2.metric("Profit (₹)", f"{total_profit:,.0f}")
+    c3.metric("Loss (₹)", f"{total_loss:,.0f}")
 
-    # -------------------------------
-    # Step 8: Visualizations
-    # -------------------------------
-    st.divider()
-    st.subheader("📈 Profit vs Loss Chart")
+    # ----- Charts -----
+    st.subheader("📈 Profit vs Loss")
     st.plotly_chart(
-        px.bar(df, x="trip_id", y="profit_loss", color="pnl_status",
-               title="Trip-wise Profit/Loss Overview"),
+        px.bar(df, x="trip_id", y="profit_loss", color="pnl_status"),
         use_container_width=True
     )
 
-    st.divider()
-    st.subheader("⛽ Fuel Usage vs Distance")
+    st.subheader("⛽ Fuel vs Distance")
     st.plotly_chart(
-        px.scatter(df, x="distance_km", y="actual_fuel_liters", color="leakage_flag",
-                   title="Fuel Consumption Trend"),
+        px.scatter(df, x="distance_km", y="actual_fuel_liters", color="leakage_flag"),
         use_container_width=True
     )
 
-    # -------------------------------
-    # Step 9: Download Button
-    # -------------------------------
+    # ----- Download -----
     st.download_button(
-        "💾 Download Cleaned Report",
+        "💾 Download Cleaned File",
         df.to_csv(index=False),
         "cleaned_trip_data.csv",
         "text/csv"
     )
 
 else:
-    st.info("📥 Please upload your processed_trips.csv file to start.")
+    st.info("📥 Upload CSV or XLSX to start.")
