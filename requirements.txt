@@ -1,6 +1,6 @@
-streamlit==1.29.0
-pandas==2.0.3
-numpy==1.26.4
-plotly==5.18.0
+streamlit
+pandas
+numpy
+plotly
 supabase
 google-generativeai
