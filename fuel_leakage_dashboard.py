@@ -139,7 +139,7 @@ if st.button("Get AI Answer"):
         st.warning("Please type a question first.")
     else:
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash-latest")
+            model = genai.GenerativeModel("gemini-1.0-pro")
             ans = model.generate_content(user_q)
             st.success(ans.text)
         except Exception as e:
