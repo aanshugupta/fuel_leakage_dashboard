@@ -1,6 +1,7 @@
 streamlit
+supabase-py
 pandas
 numpy
 plotly
-supabase
-
+openpyxl
+requests
