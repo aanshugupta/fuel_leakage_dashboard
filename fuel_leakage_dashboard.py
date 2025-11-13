@@ -3,8 +3,11 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from supabase import create_client, Client
 
+from supabase import create_client, Client
+import os
+import google.generativeai as genai
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 # -------------------------------
 # Supabase Setup
 # -------------------------------
@@ -121,11 +124,10 @@ else:
 # Gemini AI Chatbot Section
 # --------------------------------------------------
 
-import google.generativeai as genai
-import os
+
 
 # Load Gemini API key
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
 
 st.divider()
 st.header("🤖 Fuel AI Assistant (Ask Anything)")
