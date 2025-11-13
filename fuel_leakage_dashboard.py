@@ -117,3 +117,28 @@ if upload:
 
 else:
     st.info("📥 Please upload your processed_trips.csv file to start.")
+# --------------------------------------------------
+# Gemini AI Chatbot Section
+# --------------------------------------------------
+
+import google.generativeai as genai
+import os
+
+# Load Gemini API key
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
+st.divider()
+st.header("🤖 Fuel AI Assistant (Ask Anything)")
+
+user_q = st.text_input("Ask your question about trips, fuel leakage, profit/loss, efficiency etc:")
+
+if st.button("Get AI Answer"):
+    if user_q.strip() == "":
+        st.warning("Please type a question first.")
+    else:
+        try:
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            ans = model.generate_content(user_q)
+            st.success(ans.text)
+        except Exception as e:
+            st.error(f"AI Error: {e}")
