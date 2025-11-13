@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -53,18 +54,13 @@ if upload:
     df = df[(df["distance_km"] > 0) & (df["actual_fuel_liters"] > 0)]
 
     # -------------------------------
-    # ✅ Step 4: Calculate Route, Total Liters & Profit/Loss
+    # Step 4: Calculate Profit & Loss
     # -------------------------------
-    if "avg_mileage" not in df.columns:
-        df["avg_mileage"] = 3  # Default average mileage (km per liter)
-
-    df["route_km"] = df["distance_km"]
-    df["total_liters"] = np.where(df["avg_mileage"] > 0, df["route_km"] / df["avg_mileage"], 0)
-
     df["revenue_per_km"] = np.where(df["leakage_flag"] == "Leakage Suspected", 90, 150)
     df["expected_revenue"] = df["distance_km"] * df["revenue_per_km"]
     df["fuel_cost"] = df["actual_fuel_liters"] * df["diesel_price_per_liter"]
 
+    # Create some random loss to make data realistic
     if len(df) > 0:
         loss_rows = df.sample(frac=0.25, random_state=42).index
         df.loc[loss_rows, "fuel_cost"] *= np.random.uniform(1.2, 1.8, len(loss_rows))
@@ -72,6 +68,7 @@ if upload:
     df["profit_loss"] = df["expected_revenue"] - df["fuel_cost"]
     df["pnl_status"] = np.where(df["profit_loss"] > 0, "Profit", "Loss")
 
+    # Fill remaining NaN
     df = df.fillna(0)
 
     # -------------------------------
@@ -91,22 +88,18 @@ if upload:
         st.error(f"❌ Upload error: {e}")
 
     # -------------------------------
-    # Step 7: Dashboard Overview
+    # Step 7: Show Dashboard
     # -------------------------------
     total_trips = len(df)
     total_profit = df[df["pnl_status"] == "Profit"]["profit_loss"].sum()
-    total_loss = abs(df[df["pnl_status"] == "Loss"]["profit_loss"].sum())
+    total_loss = df[df["pnl_status"] == "Loss"]["profit_loss"].sum()
     avg_profit = df["profit_loss"].mean()
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Total Trips", total_trips)
     c2.metric("💰 Total Profit (₹)", f"{total_profit:,.0f}")
     c3.metric("📉 Total Loss (₹)", f"{total_loss:,.0f}")
-    c4.metric("⚙️ Avg Profit per Trip (₹)", f"{avg_profit:,.0f}")
 
-    # -------------------------------
-    # Step 8: Visualizations
-    # -------------------------------
     st.divider()
     st.subheader("📈 Profit vs Loss Chart")
     st.plotly_chart(
@@ -115,17 +108,6 @@ if upload:
         use_container_width=True
     )
 
-    st.divider()
-    st.subheader("⛽ Fuel Usage vs Distance")
-    st.plotly_chart(
-        px.scatter(df, x="distance_km", y="actual_fuel_liters", color="leakage_flag",
-                   title="Fuel Consumption Trend"),
-        use_container_width=True
-    )
-
-    # -------------------------------
-    # Step 9: Download Button
-    # -------------------------------
     st.download_button(
         "💾 Download Cleaned Report",
         df.to_csv(index=False),
