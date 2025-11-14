@@ -3,212 +3,211 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from supabase import create_client, Client
-from google import genai
+import google.generativeai as genai
 import json
 import typing
 
-# -------------------------------------------------
-# PAGE SETTINGS
-# -------------------------------------------------
-st.set_page_config(page_title="Fuel Leakage Dashboard", layout="wide")
-st.title("⛽ Fuel Leakage Detection, Efficiency & Profit/Loss Dashboard")
+# ------------------------------------------------------------
+# GEMINI SETUP (REQUIRED: add GEMINI_API_KEY in Streamlit Secrets)
+# ------------------------------------------------------------
+GEMINI_KEY = st.secrets.get("GEMINI_API_KEY")
 
-# -------------------------------------------------
-# LOAD SECRETS
-# -------------------------------------------------
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+    GEMINI_MODEL = "gemini-1.5-flash"  # Safe + supported model
+else:
+    GEMINI_MODEL = None
+
+# Chatbot function
+def ask_gemini(question: str):
+    if not GEMINI_MODEL:
+        return "Gemini API key missing or invalid."
+    try:
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        resp = model.generate_content(question)
+        return resp.text if hasattr(resp, "text") else str(resp)
+    except Exception as e:
+        if "404" in str(e):
+            return "Model not found. Use gemini-1.5-flash."
+        return f"Gemini Error: {e}"
+
+# ------------------------------------------------------------
+# SUPABASE SETUP (add URL + KEY in Streamlit Secrets)
+# ------------------------------------------------------------
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
 
-if not GEMINI_API_KEY:
-    st.error("Missing GEMINI_API_KEY in Streamlit Secrets.")
-    st.stop()
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("Supabase credentials missing in secrets.")
-    st.stop()
+# ------------------------------------------------------------
+# PAGE UI & TITLE
+# ------------------------------------------------------------
+st.set_page_config(page_title="Fuel Leakage Dashboard", layout="wide")
+st.title("⛽ Fuel Leakage Detection, Efficiency & Profit/Loss Dashboard")
 
-# -------------------------------------------------
-# GEMINI NEW CLIENT
-# -------------------------------------------------
-try:
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    GEMINI_MODEL = "gemini-2.5-flash"
-except Exception as e:
-    st.error(f"Gemini initialization error: {e}")
-    st.stop()
+# ------------------------------------------------------------
+# FILE UPLOADER
+# ------------------------------------------------------------
+uploaded = st.sidebar.file_uploader(
+    "📂 Upload CSV or Excel",
+    type=["csv", "xlsx"]
+)
 
-# -------------------------------------------------
-# SUPABASE INIT
-# -------------------------------------------------
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# -------------------------------------------------
-# FILE UPLOADER (SIDEBAR)
-# -------------------------------------------------
-st.sidebar.header("📂 Upload Trip Data File")
-uploaded = st.sidebar.file_uploader("Upload CSV / Excel", type=["csv", "xlsx"])
-
-# -------------------------------------------------
-# AI CHATBOT SECTION
-# -------------------------------------------------
+# ------------------------------------------------------------
+# SIDEBAR CHATBOT (BELOW UPLOADER)
+# ------------------------------------------------------------
 st.sidebar.write("---")
-st.sidebar.subheader("🤖 Fuel AI Assistant")
+st.sidebar.subheader("🤖 AI Assistant")
 
-user_question_sidebar = st.sidebar.text_input("Ask AI something:")
+question_sidebar = st.sidebar.text_input("Ask AI about your data:")
+if st.sidebar.button("Ask"):
+    if question_sidebar.strip():
+        st.sidebar.success(ask_gemini(question_sidebar))
+    else:
+        st.sidebar.warning("Type a question first.")
 
-if st.sidebar.button("Get AI Answer"):
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=user_question_sidebar
-        )
-        st.sidebar.success(response.text)
-    except Exception as e:
-        st.sidebar.error(f"AI Error: {e}")
-
-# -------------------------------------------------
-# COLUMN NORMALIZATION
-# -------------------------------------------------
+# ------------------------------------------------------------
+# COLUMN NAME NORMALIZER
+# ------------------------------------------------------------
 def normalize_columns(df):
-    col_map = {c.lower().strip(): c for c in df.columns}
+    original = {c.lower().strip(): c for c in df.columns}
 
-    def find(possible):
-        for p in possible:
-            if p.lower() in col_map:
-                return col_map[p.lower()]
+    def match(names):
+        for n in names:
+            if n.lower() in original:
+                return original[n.lower()]
         return None
 
     mapping = {
-        "trip_id": find(["trip_id", "id", "trip", "sr no", "srno"]),
-        "truck_id": find(["truck_id", "truck no", "vehicle", "truck", "truck number"]),
-        "distance_km": find(["distance_km", "distance", "km"]),
-        "actual_fuel_liters": find(["actual_fuel_liters", "fuel", "fuel_ltr", "fuel liters"]),
-        "diesel_price_per_liter": find(["diesel_price_per_liter", "diesel price", "fuel_price", "price"]),
-        "leakage_flag": find(["leakage_flag", "leakage", "status"])
+        "trip_id": match(["trip_id", "trip id", "trip", "id", "tripid"]),
+        "truck_id": match(["truck_id", "truck", "vehicle_no", "vehicle", "truck number"]),
+        "distance_km": match(["distance_km", "distance", "km", "distance (km)"]),
+        "actual_fuel_liters": match(["actual_fuel_liters", "fuel", "fuel_liters", "fuel_ltr"]),
+        "diesel_price_per_liter": match(["diesel_price_per_liter", "price", "fuel_price"]),
+        "leakage_flag": match(["leakage_flag", "leakage", "status"])
     }
 
-    for target_col, source_col in mapping.items():
-        if source_col:
-            df = df.rename(columns={source_col: target_col})
+    for new_col, old_col in mapping.items():
+        if old_col:
+            df = df.rename(columns={old_col: new_col})
         else:
-            # Create empty columns if missing
-            if target_col == "trip_id":
-                df[target_col] = df.index.astype(str)
-            elif target_col == "truck_id":
-                df[target_col] = "Unknown"
-            elif target_col in ["distance_km", "actual_fuel_liters", "diesel_price_per_liter"]:
-                df[target_col] = 0
-            else:
-                df[target_col] = "Normal"
+            df[new_col] = "Normal" if new_col == "leakage_flag" else 0
 
     return df
 
-
-# -------------------------------------------------
-# MAIN — PROCESSING AFTER FILE UPLOAD
-# -------------------------------------------------
+# ------------------------------------------------------------
+# MAIN — AFTER FILE UPLOAD
+# ------------------------------------------------------------
 if uploaded:
 
-    try:
-        if uploaded.name.endswith(".csv"):
-            df = pd.read_csv(uploaded)
-        else:
-            df = pd.read_excel(uploaded)
-    except Exception as e:
-        st.error(f"File Read Error: {e}")
-        st.stop()
+    # Load CSV or Excel
+    if uploaded.name.endswith(".csv"):
+        df = pd.read_csv(uploaded)
+    else:
+        df = pd.read_excel(uploaded)
 
-    st.subheader("📊 Uploaded Data Preview")
-    st.dataframe(df.head(15))
+    st.subheader("📄 Uploaded File Preview")
+    st.dataframe(df.head())
 
+    # Normalize columns
     df = normalize_columns(df)
 
-    # Numeric cleanup
+    # Convert numbers
     for col in ["distance_km", "actual_fuel_liters", "diesel_price_per_liter"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    df.loc[df["diesel_price_per_liter"] == 0, "diesel_price_per_liter"] = 95
+    # Fix missing values
+    df["diesel_price_per_liter"] = df["diesel_price_per_liter"].replace(0, 95)
 
-    # Business logic
-    df["revenue_per_km"] = np.where(
-        df["leakage_flag"].astype(str).str.contains("Leak", case=False),
-        90,
-        150
-    )
-
+    # Calculate metrics
+    df["revenue_per_km"] = df["distance_km"].apply(lambda x: 150 if x > 0 else 0)
     df["expected_revenue"] = df["distance_km"] * df["revenue_per_km"]
     df["fuel_cost"] = df["actual_fuel_liters"] * df["diesel_price_per_liter"]
     df["profit_loss"] = df["expected_revenue"] - df["fuel_cost"]
-    df["pnl_status"] = np.where(df["profit_loss"] > 0, "Profit", "Loss")
+    df["pnl_status"] = df["profit_loss"].apply(lambda x: "Profit" if x > 0 else "Loss")
 
-    st.success("Cleaned & Calculated Data:")
-    st.dataframe(df.head(15))
+    # Show cleaned data
+    st.success("Cleaned & Processed Data")
+    st.dataframe(df.head())
 
-    # -------------------------------------------------
-    # Upload to Supabase
-    # -------------------------------------------------
-    if st.button("Upload Clean Data to Supabase"):
+    # ------------------------------------------------------------
+    # SUPABASE UPLOAD BUTTON
+    # ------------------------------------------------------------
+    if st.button("Upload to Supabase"):
         try:
-            data_json = df.where(pd.notnull(df), None).to_dict(orient="records")
-            res = supabase.table("trip_data").insert(data_json).execute()
-            st.success("Uploaded Successfully!")
+            records = df.to_dict(orient="records")
+            res = supabase.table("trip_data").insert(records).execute()
+            st.success("Data uploaded to Supabase!")
         except Exception as e:
-            st.error(f"Upload Error: {e}")
+            st.error(f"Supabase error: {e}")
 
-    # -------------------------------------------------
-    # Summary Cards
-    # -------------------------------------------------
+    # Summary
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Trips", len(df))
+    c2.metric("Profit (₹)", f"{df[df.pnl_status=='Profit'].profit_loss.sum():,.0f}")
+    c3.metric("Loss (₹)", f"{df[df.pnl_status=='Loss'].profit_loss.sum():,.0f}")
+
     st.write("---")
-    t1, t2, t3 = st.columns(3)
-    t1.metric("Total Trips", len(df))
-    t2.metric("Total Profit (₹)", round(df[df.pnl_status == "Profit"].profit_loss.sum(), 2))
-    t3.metric("Total Loss (₹)", round(df[df.pnl_status == "Loss"].profit_loss.sum(), 2))
+    st.subheader("📈 Profit-Loss Graph")
+    st.plotly_chart(
+        px.bar(df, x=df.index, y="profit_loss", color="pnl_status"),
+        use_container_width=True
+    )
 
-    # -------------------------------------------------
-    # Graph
-    # -------------------------------------------------
-    st.subheader("📈 Profit / Loss Graph")
-    fig = px.bar(df, x="trip_id", y="profit_loss", color="pnl_status")
-    st.plotly_chart(fig, use_container_width=True)
-
-    # -------------------------------------------------
-    # Truck Search
-    # -------------------------------------------------
+    # ------------------------------------------------------------
+    # 🔍 TRUCK / TRIP SEARCH SECTION
+    # ------------------------------------------------------------
     st.write("---")
-    st.subheader("🚚 Search Truck Details")
+    st.header("🚚 Search Truck / Trip Details")
 
-    truck_search = st.text_input("Enter Truck Number:")
-    if truck_search:
-        result = df[df["truck_id"].astype(str).str.contains(truck_search, case=False)]
-        if len(result) == 0:
-            st.warning("No matching truck found.")
-        else:
-            st.dataframe(result)
+    # Detect truck_id or trip_id
+    id_col = None
+    for col in ["truck_id", "trip_id"]:
+        if col in df.columns:
+            id_col = col
+            break
 
-    # -------------------------------------------------
-    # Chatbot (Main)
-    # -------------------------------------------------
-    st.write("---")
-    st.header("🤖 Ask Anything About Your Data")
+    if not id_col:
+        st.warning("No truck_id or trip_id found in this file.")
+    else:
+        unique_list = df[id_col].astype(str).unique()
 
-    q = st.text_input("Type your question:")
+        selected = st.selectbox("Select Truck / Trip:", unique_list)
 
-    if st.button("Get Answer"):
-        context = df.head(10).to_dict(orient="records")
-        prompt = f"""
-        You are analyzing fuel trip data.
-        Data sample: {json.dumps(context, indent=2)}
-        Question: {q}
-        Answer clearly:
-        """
+        filtered = df[df[id_col].astype(str) == str(selected)]
 
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt
+        st.subheader(f"📄 Details for {selected}")
+        st.dataframe(filtered)
+
+        # Truck summary
+        st.success(
+            f"""
+            Trips: {len(filtered)}
+            Total Distance: {filtered['distance_km'].sum():,.2f} km  
+            Fuel Used: {filtered['actual_fuel_liters'].sum():,.2f} L  
+            Total Profit/Loss: ₹{filtered['profit_loss'].sum():,.2f}
+            """
         )
 
-        st.success(response.text)
+        # Truck graph
+        st.subheader("📊 Truck Performance Graph")
+        st.plotly_chart(
+            px.line(filtered, x=filtered.index, y="profit_loss",
+                    title=f"Profit/Loss Trend for {selected}"),
+            use_container_width=True
+        )
+
+    # ------------------------------------------------------------
+    # MAIN CHATBOT
+    # ------------------------------------------------------------
+    st.write("---")
+    st.header("🤖 AI Assistant (Full Data Q/A)")
+
+    q = st.text_input("Ask anything about the uploaded data:")
+    if st.button("Get AI Answer"):
+        context = df.head(20).to_dict(orient="records")
+        prompt = f"Here is sample trip data:\n{json.dumps(context, indent=2)}\n\nUser question: {q}"
+        st.success(ask_gemini(prompt))
 
 else:
-    st.info("Upload a CSV or Excel file to begin.")
+    st.info("Please upload a file to begin.")
