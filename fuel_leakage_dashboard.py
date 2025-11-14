@@ -4,35 +4,35 @@ import numpy as np
 import plotly.express as px
 from supabase import create_client, Client
 import google.generativeai as genai
-import re
-import json
 
-# -------------------------------
-# Streamlit Secrets Load
-# -------------------------------
+# ------------------------------------------------
+# Load Secrets
+# ------------------------------------------------
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
 
 if not GEMINI_API_KEY:
-    st.error("Gemini API key missing in Streamlit secrets!")
+    st.error("Gemini API Key Missing!")
 if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("Supabase credentials missing!")
+    st.error("Supabase Credentials Missing!")
 
-# -------------------------------
+# ------------------------------------------------
 # Gemini Setup
-# -------------------------------
+# ------------------------------------------------
 genai.configure(api_key=GEMINI_API_KEY)
-gmodel = genai.GenerativeModel("gemini-2.0-flash")
+gmodel = genai.GenerativeModel("gemini-2.0-flash")  # stable model
 
-# -------------------------------
+
+# ------------------------------------------------
 # Supabase Setup
-# -------------------------------
+# ------------------------------------------------
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# -------------------------------
-# Auto Detect Header Row Function
-# -------------------------------
+
+# ------------------------------------------------
+# Clean File Function (Auto Header Detection at Row 10)
+# ------------------------------------------------
 def clean_file(uploaded_file):
     try:
         if uploaded_file.name.endswith(".csv"):
@@ -40,39 +40,40 @@ def clean_file(uploaded_file):
         else:
             raw = pd.read_excel(uploaded_file, header=None)
     except Exception as e:
-        st.error(f"File reading error: {e}")
+        st.error(f"❌ File read error: {e}")
         st.stop()
 
+    # Auto detect header row (Row 10 -> index 9)
     header_row = None
     for i in range(len(raw)):
-        row = raw.iloc[i].astype(str).tolist()
+        row = raw.iloc[i].astype(str).str.lower().tolist()
 
-        # Detect header using strong patterns
         if (
-            any("s.no" in x.lower() for x in row) or
-            any("transaction" in x.lower() for x in row) or
-            any(re.match(r"txn", x.lower()) for x in row)
+            any(
+                key in x
+                for x in row
+                for key in ["s.no", "transaction", "txn", "date", "amount"]
+            )
         ):
             header_row = i
             break
 
     if header_row is None:
-        st.error("Could not detect column headers. Upload a proper file.")
-        st.stop()
+        header_row = 9  # default (your file format)
 
-    # Reload clean dataset
+    # Load final cleaned df
     if uploaded_file.name.endswith(".csv"):
         df = pd.read_csv(uploaded_file, header=header_row)
     else:
         df = pd.read_excel(uploaded_file, header=header_row)
 
     # Remove unnamed columns
-    df = df.loc[:, ~df.columns.astype(str).str.contains("Unnamed")]
+    df = df.loc[:, ~df.columns.astype(str).str.contains("unnamed")]
 
     # Clean column names
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
-    # Fix known names
+    # Rename must-have columns
     rename_map = {
         "sno": "s_no",
         "s.no": "s_no",
@@ -82,135 +83,130 @@ def clean_file(uploaded_file):
         "txn_id": "transaction_id",
     }
 
-    df.rename(columns={col: rename_map.get(col, col) for col in df.columns}, inplace=True)
+    df.rename(columns={c: rename_map.get(c, c) for c in df.columns}, inplace=True)
 
     return df
 
 
-# -------------------------------
-# Streamlit Layout
-# -------------------------------
-st.set_page_config(page_title="Universal Data Dashboard", layout="wide")
+# ------------------------------------------------
+# Streamlit Page Setup
+# ------------------------------------------------
+st.set_page_config(page_title="Universal Dashboard", layout="wide")
+st.title("📄 Universal File → Cleaned Dashboard")
 
-st.title("📄 Universal Data Dashboard (Fuel + Sales + Maintenance + Anything)")
 
-
-# -------------------------------
-# Sidebar Upload + AI Chatbot
-# -------------------------------
+# ------------------------------------------------
+# Sidebar: Upload + AI
+# ------------------------------------------------
 st.sidebar.header("Upload File")
-uploaded = st.sidebar.file_uploader("Upload CSV/Excel", type=["csv", "xlsx"])
+uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
 st.sidebar.write("---")
-st.sidebar.header("🤖 Ask AI (Sidebar)")
+st.sidebar.header("🤖 Ask AI")
 
-side_q = st.sidebar.text_input("Ask anything about the data")
+user_q_sidebar = st.sidebar.text_input("Ask anything")
 
 if st.sidebar.button("Ask AI"):
-    if uploaded:
-        preview = st.session_state.get("preview_data", "No data loaded")
-        prompt = f"Here is the data sample: {preview}\n\nUser question: {side_q}"
-        try:
-            ans = gmodel.generate_content(prompt)
-            st.sidebar.success(ans.text)
-        except Exception as e:
-            st.sidebar.error(str(e))
-    else:
-        st.sidebar.warning("Upload a file first!")
+    try:
+        ai_answer = gmodel.generate_content(user_q_sidebar)
+        st.sidebar.success(ai_answer.text)
+    except Exception as e:
+        st.sidebar.error(str(e))
 
 
-# -------------------------------
-# MAIN: If File Uploaded
-# -------------------------------
+# ------------------------------------------------
+# MAIN LOGIC
+# ------------------------------------------------
 if uploaded:
 
     df = clean_file(uploaded)
 
-    st.subheader("📊 Cleaned Data Preview (Top 20 Rows)")
-    st.dataframe(df.head(20))
+    # Show cleaned table
+    st.subheader("📊 Cleaned Data (Auto Detected Table)")
+    st.dataframe(df.head(50), use_container_width=True)
 
-    # Save preview for AI use
-    st.session_state["preview_data"] = df.head(10).to_dict(orient="records")
-
-    # -----------------------------------
-    # Transaction ID Section
-    # -----------------------------------
     st.write("---")
-    st.subheader("🔎 Search by Transaction ID")
+
+    # ------------------------------------------------
+    # Transaction ID Handling
+    # ------------------------------------------------
+    st.subheader("🔍 Search by Transaction ID")
 
     if "transaction_id" not in df.columns:
-        st.error("❌ Transaction ID column not detected.")
+        st.error("❌ Transaction ID column not found! Please upload correct file.")
     else:
         txn_list = df["transaction_id"].dropna().astype(str).unique().tolist()
 
-        selected_txn = st.selectbox("Select Transaction ID", txn_list)
+        selected_txn = st.selectbox("Select Transaction ID:", txn_list)
 
         if selected_txn:
             result = df[df["transaction_id"] == selected_txn]
             st.write("### Transaction Details")
-            st.dataframe(result)
+            st.dataframe(result, use_container_width=True)
 
-    # -----------------------------------
-    # Supabase Upload
-    # -----------------------------------
     st.write("---")
-    if st.button("Upload Clean Data to Supabase"):
+
+    # ------------------------------------------------
+    # Charts Section
+    # ------------------------------------------------
+    st.subheader("📈 Charts")
+
+    numeric_cols = df.select_dtypes(include=["int64", "float64"]).columns.tolist()
+
+    if len(numeric_cols) == 0:
+        st.warning("No numeric columns found for charts.")
+    else:
+        chart_col = st.selectbox("Select Column for Pie Chart", numeric_cols)
+
+        pie_data = df[chart_col].value_counts().reset_index()
+        pie_data.columns = ["value", "count"]
+
+        fig = px.pie(
+            pie_data, names="value", values="count",
+            title=f"{chart_col} Distribution"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.write("---")
+
+    # ------------------------------------------------
+    # Upload to Supabase
+    # ------------------------------------------------
+    st.subheader("⬆ Upload Clean Data to Supabase")
+
+    if st.button("Upload Now"):
         try:
-            cleaned = df.copy()
-            cleaned = cleaned.replace({np.nan: None})
-            cleaned = cleaned.applymap(lambda x: x.isoformat() if hasattr(x, 'isoformat') else x)
-
-            records = cleaned.to_dict(orient="records")
-            supabase.table("trip_data").insert(records).execute()
-
+            upload_df = df.replace({np.nan: None})
+            supabase.table("trip_data").insert(upload_df.to_dict(orient="records")).execute()
             st.success("Uploaded Successfully!")
         except Exception as e:
             st.error(str(e))
 
-    # -----------------------------------
-    # Chart Section
-    # -----------------------------------
     st.write("---")
-    st.subheader("📈 Charts")
 
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    # ------------------------------------------------
+    # AI on Main Page
+    # ------------------------------------------------
+    st.header("🤖 AI Assisted Analysis")
 
-    if numeric_cols:
-        sel_col = st.selectbox("Select column for Pie Chart", numeric_cols)
-        temp = df[sel_col].value_counts().reset_index()
-        temp.columns = ["Label", "Count"]
+    user_q_main = st.text_input("Ask anything about your uploaded data:")
 
-        fig = px.pie(temp, names="Label", values="Count", title=f"{sel_col} Distribution")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("No numeric columns found!")
-
-    # -----------------------------------
-    # AI Main Chat
-    # -----------------------------------
-    st.write("---")
-    st.header("🤖 Ask AI About Your Data (Main Panel)")
-
-    user_q = st.text_input("Ask AI:")
-
-    if st.button("Get Answer"):
-        sample = df.head(10).to_dict(orient="records")
+    if st.button("Get AI Insight"):
+        sample = df.head(15).to_dict(orient="records")
 
         prompt = f"""
-        You are an expert data analyst.
-        Here is the uploaded data sample:
-        {json.dumps(sample)}
+        You are a data expert. Here is sample data:
+        {sample}
 
-        User question: {user_q}
-
-        Give a clear and direct answer.
+        Answer the user's question clearly:
+        {user_q_main}
         """
 
         try:
-            ai_ans = gmodel.generate_content(prompt)
-            st.success(ai_ans.text)
+            ai_out = gmodel.generate_content(prompt)
+            st.success(ai_out.text)
         except Exception as e:
             st.error(str(e))
 
 else:
-    st.info("Please upload a file to begin.")
+    st.info("Please upload a file to start.")
