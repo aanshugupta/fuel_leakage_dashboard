@@ -4,5 +4,4 @@ numpy
 plotly
 supabase
 openpyxl
-google-genai
-protobuf==4.25.3
+google-generativeai
