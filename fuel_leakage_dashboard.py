@@ -7,37 +7,34 @@ import google.generativeai as genai
 import json
 
 # ------------------------------------------------
-# CONFIG
+# API KEYS
 # ------------------------------------------------
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-ai_model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
 # ------------------------------------------------
-# PAGE SETTINGS
+# UI SETTINGS
 # ------------------------------------------------
-st.set_page_config(page_title="Fuel & Transaction Dashboard", layout="wide")
+st.set_page_config(page_title="Fuel + Transaction Dashboard", layout="wide")
 st.title("⛽ Fuel Leakage + Transaction Analysis Dashboard")
 
-# Sidebar
 uploaded = st.sidebar.file_uploader("📂 Upload CSV / Excel", type=["csv", "xlsx"])
 
-# Chatbot
 st.sidebar.write("---")
 st.sidebar.subheader("🤖 Ask AI")
-q = st.sidebar.text_input("Your Question")
-if st.sidebar.button("Ask AI"):
-    if q:
-        try:
-            ans = ai_model.generate_content(q)
-            st.sidebar.success(ans.text)
-        except Exception as e:
-            st.sidebar.error(f"AI Error: {e}")
-    else:
-        st.sidebar.warning("Type a question")
+q = st.sidebar.text_input("Ask your question:")
+
+if st.sidebar.button("Ask"):
+    try:
+        reply = model.generate_content(q)
+        st.sidebar.success(reply.text)
+    except Exception as e:
+        st.sidebar.error(str(e))
 
 
 # ------------------------------------------------
@@ -45,88 +42,87 @@ if st.sidebar.button("Ask AI"):
 # ------------------------------------------------
 if uploaded:
 
-    # Read file without header
+    # Read without header
     if uploaded.name.endswith(".csv"):
-        raw_df = pd.read_csv(uploaded, header=None)
+        df_raw = pd.read_csv(uploaded, header=None)
     else:
-        raw_df = pd.read_excel(uploaded, header=None)
+        df_raw = pd.read_excel(uploaded, header=None)
 
-    # ---- Remove first 9 rows ----
-    df = raw_df.iloc[9:].reset_index(drop=True)
+    # Remove 1–9 rows → row-10 becomes header
+    df = df_raw.iloc[9:].reset_index(drop=True)
 
-    # ---- Set row 10 as header ----
-    header_row = df.iloc[0].astype(str).tolist()
+    header = df.iloc[0].astype(str).tolist()
+    df = df[1:].reset_index(drop=True)
 
-    # FIX: Make duplicate column names unique
-    new_columns = []
+    # CLEAN DUPLICATE COLUMN NAMES
+    clean_cols = []
     seen = {}
 
-    for col in header_row:
+    for col in header:
+        col = col.strip()
+        if col == "nan" or col == "":
+            col = "Blank"
+
         if col not in seen:
             seen[col] = 1
-            new_columns.append(col)
+            clean_cols.append(col)
         else:
             seen[col] += 1
-            new_columns.append(f"{col}_{seen[col]}")
+            clean_cols.append(f"{col}_{seen[col]}")
 
-    df = df[1:].reset_index(drop=True)
-    df.columns = new_columns
+    df.columns = clean_cols
 
     st.subheader("📊 Cleaned Data Preview")
     st.dataframe(df.head(20))
 
-    # Save to Supabase
-    if st.button("Upload to Supabase"):
-        try:
-            data = df.where(pd.notnull(df), None).to_dict(orient="records")
-            res = supabase.table("trip_data").insert(data).execute()
-            st.success("Uploaded to Supabase!")
-        except Exception as e:
-            st.error(f"Upload Failed: {e}")
-
-    st.write("---")
-
-    # ------------------------------
-    # TRANSACTION ID DROPDOWN
-    # ------------------------------
-    st.header("🔍 Search by Transaction ID")
-
+    # ------------------------------------------------
+    # FIND TRANSACTION COLUMN
+    # ------------------------------------------------
     txn_col = None
-    for c in df.columns:
-        if "txn" in c.lower() or "transaction" in c.lower():
-            txn_col = c
+    patterns = ["txn", "transaction", "tx id", "transaction id"]
+
+    for col in df.columns:
+        lower = col.lower()
+        if any(key in lower for key in patterns):
+            txn_col = col
             break
 
-    if txn_col:
-        txn_values = df[txn_col].dropna().astype(str).unique().tolist()
+    if not txn_col:
+        st.error("No Transaction ID column detected. Ensure 'Transaction ID' exists in row 10.")
+        st.stop()
 
-        selected = st.selectbox("Select Transaction ID", txn_values)
-
-        if selected:
-            st.subheader("📄 Details:")
-            st.dataframe(df[df[txn_col].astype(str) == selected])
-
-    else:
-        st.warning("No Transaction ID column found!")
-
+    # ------------------------------------------------
+    # TRANSACTION SEARCH BOX
+    # ------------------------------------------------
     st.write("---")
+    st.header("🔍 Search by Transaction ID")
 
-    # ------------------------------
-    # Charts
-    # ------------------------------
+    txn_list = df[txn_col].astype(str).unique().tolist()
+
+    selected_txn = st.selectbox("Select Transaction ID:", txn_list)
+
+    if selected_txn:
+        result = df[df[txn_col].astype(str) == selected_txn]
+        st.subheader("📄 Transaction Details")
+        st.dataframe(result)
+
+    # ------------------------------------------------
+    # PIE CHART AND BAR CHART
+    # ------------------------------------------------
+    st.write("---")
     st.header("📈 Charts")
 
-    # Pie Chart
+    # PIE CHART
     cat_cols = [c for c in df.columns if df[c].nunique() < 20]
 
     if len(cat_cols) > 0:
-        col = st.selectbox("Pie chart column:", cat_cols)
-        pie_df = df[col].value_counts().reset_index()
-        pie_df.columns = ["value", "count"]
-        fig = px.pie(pie_df, names="value", values="count", title=f"{col} Distribution")
-        st.plotly_chart(fig, use_container_width=True)
+        pie_col = st.selectbox("Select column for Pie Chart:", cat_cols)
+        pc = df[pie_col].value_counts().reset_index()
+        pc.columns = ["value", "count"]
+        fig1 = px.pie(pc, names="value", values="count")
+        st.plotly_chart(fig1, use_container_width=True)
 
-    # Bar Chart
+    # BAR CHART
     num_cols = []
     for c in df.columns:
         try:
@@ -135,15 +131,16 @@ if uploaded:
         except:
             pass
 
-    if len(num_cols) >= 2:
-        x = st.selectbox("X-axis:", num_cols)
-        y = st.selectbox("Y-axis:", num_cols, index=1)
+    if len(num_cols) > 1:
+        c1, c2 = st.columns(2)
+        x = c1.selectbox("X axis:", num_cols)
+        y = c2.selectbox("Y axis:", num_cols, index=1)
 
         df[x] = pd.to_numeric(df[x], errors="coerce")
         df[y] = pd.to_numeric(df[y], errors="coerce")
 
-        fig2 = px.bar(df, x=x, y=y, title=f"{x} vs {y}")
+        fig2 = px.bar(df, x=x, y=y)
         st.plotly_chart(fig2, use_container_width=True)
 
 else:
-    st.info("📥 Upload your file to start.")
+    st.info("📥 Upload your file to begin analysis.")
