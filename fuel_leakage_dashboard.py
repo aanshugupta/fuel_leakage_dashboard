@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from supabase import create_client, Client
-from google import genai      # ✔ Correct SDK for Gemini 2.5
+import google.generativeai as genai
+# ✔ Correct SDK for Gemini 2.5
 import json
 import typing
 
