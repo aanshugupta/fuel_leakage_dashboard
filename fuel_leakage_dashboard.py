@@ -24,13 +24,43 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 st.set_page_config(page_title="Fuel Leakage Dashboard", layout="wide")
 st.title("⛽ Fuel Leakage Detection, Efficiency & Profit/Loss Dashboard")
 
-upload = st.sidebar.file_uploader("📂 Upload processed_trips.csv", type=["csv"])
+# ----------------------------------------
+# FILE UPLOAD (CSV + XLSX Supported)
+# ----------------------------------------
+upload = st.sidebar.file_uploader(
+    "📂 Upload processed_trips file",
+    type=["csv", "xlsx"]
+)
 
-# -------------------------------
-# When File Uploaded
-# -------------------------------
+# ---------------------------------------------------
+# AI CHATBOT — EXACTLY BELOW BROWSER UPLOAD
+# ---------------------------------------------------
+st.sidebar.write("---")
+st.sidebar.subheader("🤖 Fuel AI Assistant")
+
+user_question = st.sidebar.text_input("Ask AI:")
+
+if st.sidebar.button("Get AI Answer"):
+    if user_question.strip() == "":
+        st.sidebar.warning("Please enter your question.")
+    else:
+        try:
+            response = ai_model.generate_content(user_question)
+            st.sidebar.success(response.text)
+        except Exception as e:
+            st.sidebar.error(f"AI Error: {e}")
+
+# ---------------------------------------------------
+# IF FILE UPLOADED → PROCESS FUEL ANALYSIS
+# ---------------------------------------------------
 if upload:
-    df = pd.read_csv(upload)
+
+    # Detect file type automatically
+    if upload.name.endswith(".csv"):
+        df = pd.read_csv(upload)
+    else:
+        df = pd.read_excel(upload)
+
     st.write("📊 Uploaded File Preview:", df.head())
 
     required_cols = [
@@ -59,7 +89,6 @@ if upload:
 
     df["profit_loss"] = df["expected_revenue"] - df["fuel_cost"]
     df["pnl_status"] = np.where(df["profit_loss"] > 0, "Profit", "Loss")
-
     df = df.fillna(0)
 
     st.success("✅ Cleaned and Calculated Data Ready!")
@@ -97,23 +126,4 @@ if upload:
     )
 
 else:
-    st.info("📥 Please upload your processed_trips.csv file to start.")
-
-# --------------------------------------------------
-# Gemini AI Chatbot Section
-# --------------------------------------------------
-
-st.write("---")
-st.header("🤖 Fuel AI Assistant (Ask Anything)")
-
-question = st.text_input("Ask your question about trips, fuel, leakage, profit/loss etc:")
-
-if st.button("Get AI Answer"):
-    if question.strip() == "":
-        st.warning("Please enter your question.")
-    else:
-        try:
-            response = ai_model.generate_content(question)
-            st.success(response.text)
-        except Exception as e:
-            st.error(f"AI Error: {e}")
+    st.info("📥 Please upload your processed_trips file to start.")
