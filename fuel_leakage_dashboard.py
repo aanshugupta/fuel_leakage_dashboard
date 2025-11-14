@@ -24,7 +24,7 @@ if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
         # prefer a stable flash model; change only if your account supports it
-        GEMINI_MODEL = "gemini-1.5-flash"
+        GEMINI_MODEL = "gemini-2.5-flash"
     except Exception:
         GEMINI_MODEL = None
 else:
