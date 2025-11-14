@@ -4,3 +4,4 @@ numpy
 plotly
 supabase
 google-generativeai
+openpyxl
