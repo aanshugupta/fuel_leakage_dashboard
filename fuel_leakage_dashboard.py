@@ -2,221 +2,186 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from supabase import create_client, Client
+from supabase import create_client
 from google import genai
-from io import BytesIO
 
-# ---------------------------------------------------------
-#  LOAD SECRETS
-# ---------------------------------------------------------
+# --------------------------- SETTINGS ---------------------------
+st.set_page_config(page_title="Fuel PRO Dashboard", layout="wide")
+
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
-# ---------------------------------------------------------
-#  STREAMLIT PAGE SETTINGS
-# ---------------------------------------------------------
-st.set_page_config(page_title="Premium Fuel Dashboard", layout="wide")
-st.title("⛽ **Premium Fuel / Sales Intelligence Dashboard**")
+
+# --------------------------- PRO UI ---------------------------
+st.markdown("""
+    <style>
+        .big-title { font-size:38px; font-weight:700; margin-bottom:15px; }
+        .section-title { font-size:26px; font-weight:600; margin-top:30px; }
+        .metric-card {
+            padding:18px; border-radius:12px; background:#f7f7f7; 
+            border:1px solid #e0e0e0; text-align:center;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+st.markdown("<div class='big-title'>⛽ Fuel / Sales PRO Intelligence Dashboard</div>", unsafe_allow_html=True)
 
 
-# ---------------------------------------------------------
-#  SIDEBAR — LOAD DATA
-# ---------------------------------------------------------
-st.sidebar.header("📂 Data Source")
+# --------------------------- LOAD DATA ---------------------------
+st.sidebar.header("📂 Load Your Data")
 
 table_list = ["sales_data", "trip_data", "driver_summary"]
 selected_table = st.sidebar.selectbox("Select Supabase Table", table_list)
-load_supabase_btn = st.sidebar.button("Load from Supabase")
 
-uploaded_file = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+load_supabase = st.sidebar.button("Load From Supabase")
+upload_file = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
 df = None
 
-
-# ---------------------------------------------------------
-#  SUPABASE LOAD FUNCTION
-# ---------------------------------------------------------
-def load_data_from_supabase(table):
+def load_from_supabase(table):
     result = supabase.table(table).select("*").execute()
     return pd.DataFrame(result.data)
 
+# Load logic
+if load_supabase:
+    df = load_from_supabase(selected_table)
+    st.success(f"Loaded data from Supabase table: {selected_table}")
 
-# ---------------------------------------------------------
-#  LOAD LOGIC
-# ---------------------------------------------------------
-if load_supabase_btn:
-    df = load_data_from_supabase(selected_table)
-    st.success(f"Loaded data from Supabase → {selected_table}")
-
-elif uploaded_file:
-    try:
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file, skiprows=9)
-        else:
-            df = pd.read_excel(uploaded_file, skiprows=9)
-        st.success(f"File Loaded: {uploaded_file.name}")
-    except Exception as e:
-        st.error("Error loading file: " + str(e))
+elif upload_file:
+    if upload_file.name.endswith(".csv"):
+        df = pd.read_csv(upload_file, skiprows=0)
+    else:
+        df = pd.read_excel(upload_file, skiprows=0)
+    st.success(f"File Loaded: {upload_file.name}")
 
 
-# ---------------------------------------------------------
-#  IF DATA EXISTS — SHOW PREMIUM DASHBOARD
-# ---------------------------------------------------------
+# =================================================================
+#                    SHOW DASHBOARD ONLY IF DATA EXISTS
+# =================================================================
 if df is not None:
 
-    # Auto convert types
     df = df.apply(pd.to_numeric, errors="ignore")
 
-    st.subheader("📄 Data Preview")
+    st.subheader("📘 Data Preview")
     st.dataframe(df, use_container_width=True)
 
-    # ---------------------------------------------------------
-    #  TRANSACTION LOOKUP
-    # ---------------------------------------------------------
-    st.subheader("🚚 Transaction / Truck Lookup")
 
-    if "Transaction ID" in df.columns:
+    # --------------------------- LOOKUP ---------------------------
+    st.markdown("<div class='section-title'>🚚 Transaction / Truck Lookup</div>", unsafe_allow_html=True)
 
-        txn_ids = df["Transaction ID"].dropna().unique().tolist()
-        selected_txn = st.selectbox("Choose Transaction ID", ["Select..."] + txn_ids)
+    txn_col = None
+    for col in df.columns:
+        if "transaction" in col.lower() and "id" in col.lower():
+            txn_col = col
+            break
 
-        if selected_txn != "Select...":
-            txn_data = df[df["Transaction ID"] == selected_txn]
-            st.success(f"Found {len(txn_data)} matching records")
-            st.dataframe(txn_data)
+    if txn_col:
+        ids = df[txn_col].dropna().unique().tolist()
+        selected_id = st.selectbox("Select Transaction ID", ["Select..."] + ids)
 
-            # ---------------- AI SUMMARY FOR TRUCK ----------------
-            ask = f"""
-            You are an intelligent fleet analyst.
-            Here is the truck fuel record:
-            {txn_data.to_string()}
-            Provide a smart summary including:
-            - Fuel usage
-            - Any leakage suspicion
-            - Efficiency score
-            - Recommendations
-            """
-            res = ai.models.generate_content(model="gemini-1.5-flash", contents=ask)
+        if selected_id != "Select...":
+            record = df[df[txn_col] == selected_id]
+            st.dataframe(record)
+
+            question = f"Analyse this record:\n{record.to_string()}"
+            res = ai.models.generate_content(model="gemini-1.5-flash", contents=question)
             st.info(res.text)
-
-
     else:
-        st.warning("⚠ 'Transaction ID' column not found.")
+        st.warning("No Transaction ID column found.")
 
 
-    # ---------------------------------------------------------
-    #  QUICK STATS
-    # ---------------------------------------------------------
-    st.subheader("📊 Quick Stats")
+    # --------------------------- QUICK STATS ---------------------------
+    st.markdown("<div class='section-title'>📊 Quick Stats</div>", unsafe_allow_html=True)
 
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric("Total Records", len(df))
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Records", len(df))
 
     if "Amount" in df.columns:
-        col2.metric("Total Fuel Amount", round(df["Amount"].sum(), 2))
-
+        c2.metric("Total Amount", round(df["Amount"].sum(), 2))
     if "Liters" in df.columns:
-        col3.metric("Total Liters", round(df["Liters"].sum(), 2))
-
+        c3.metric("Total Liters", round(df["Liters"].sum(), 2))
     if "Fuel Station ID" in df.columns:
-        col4.metric("Unique Fuel Stations", df["Fuel Station ID"].nunique())
+        c4.metric("Fuel Stations", df["Fuel Station ID"].nunique())
 
 
-    # ---------------------------------------------------------
-    #  PREMIUM FEATURE — FUEL LEAKAGE DETECTION
-    # ---------------------------------------------------------
-    st.subheader("🚨 Fuel Leakage Detection")
+    # --------------------------- LEAKAGE CHECK ---------------------------
+    st.markdown("<div class='section-title'>🚨 Fuel Leakage Detection</div>", unsafe_allow_html=True)
 
-    leakage_results = []
+    leak_cols = ["Billed Liters", "Delivered Liters"]
 
-    if "Billed Liters" in df.columns and "Delivered Liters" in df.columns:
+    if all(col in df.columns for col in leak_cols):
 
         df["Leak"] = df["Billed Liters"] - df["Delivered Liters"]
-        suspicious = df[df["Leak"] > 2]  # tolerance = 2 liters
+        leaks = df[df["Leak"] > 2]
 
-        if len(suspicious) > 0:
-            st.error("⚠ **Possible Fuel Leakage Detected**")
-            st.dataframe(suspicious)
+        if len(leaks) > 0:
+            st.error("⚠ Possible Leakage Detected")
+            st.dataframe(leaks)
         else:
-            st.success("No leakage detected based on available fields.")
-
+            st.success("No leakage found.")
     else:
-        st.warning("Leakage check skipped — Required columns missing.")
+        st.warning("Leakage check skipped — columns missing.")
 
 
-    # ---------------------------------------------------------
-    #  MONTHLY ANALYSIS
-    # ---------------------------------------------------------
-    if "Transaction Date" in df.columns:
-        st.subheader("📅 Monthly Summary")
+    # --------------------------- MONTHLY SUMMARY ---------------------------
+    st.markdown("<div class='section-title'>🗓 Monthly Summary</div>", unsafe_allow_html=True)
 
-        df["Transaction Date"] = pd.to_datetime(df["Transaction Date"], errors="coerce")
-        df["Month"] = df["Transaction Date"].dt.to_period("M").astype(str)
+    date_col = None
+    for col in df.columns:
+        if "date" in col.lower():
+            date_col = col
+            break
+
+    if date_col:
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df["Month"] = df[date_col].dt.to_period("M").astype(str)
 
         monthly = df.groupby("Month").sum(numeric_only=True)
-        st.line_chart(monthly["Liters"] if "Liters" in monthly else monthly.iloc[:, 0])
+
+        if not monthly.empty:
+            st.line_chart(monthly.iloc[:, 0])
+        else:
+            st.info("No numeric data to plot.")
+
+    else:
+        st.warning("No date column found.")
 
 
-    # ---------------------------------------------------------
-    #  PREMIUM CHART ENGINE
-    # ---------------------------------------------------------
-    st.subheader("📈 Advanced Chart Builder")
+    # --------------------------- PRO CHART BUILDER ---------------------------
+    st.markdown("<div class='section-title'>📈 Advanced Chart Builder</div>", unsafe_allow_html=True)
 
-    numeric_cols = df.select_dtypes(include=["int64", "float64"]).columns.tolist()
+    numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
 
     if numeric_cols:
-        col_to_plot = st.selectbox("Select Numeric Column", numeric_cols)
+        col_sel = st.selectbox("Select Numeric Column", numeric_cols)
         chart_type = st.selectbox("Select Chart Type", ["Line", "Bar", "Area", "Histogram"])
 
-        clean_df = df[[col_to_plot]].dropna()
+        safe_df = df[[col_sel]].dropna()
 
         if chart_type == "Line":
-            fig = px.line(clean_df, y=col_to_plot)
+            fig = px.line(safe_df, y=col_sel)
         elif chart_type == "Bar":
-            fig = px.bar(clean_df, y=col_to_plot)
+            fig = px.bar(safe_df, y=col_sel)
         elif chart_type == "Area":
-            fig = px.area(clean_df, y=col_to_plot)
+            fig = px.area(safe_df, y=col_sel)
         else:
-            fig = px.histogram(clean_df, x=col_to_plot)
+            fig = px.histogram(safe_df, x=col_sel)
 
         st.plotly_chart(fig, use_container_width=True)
 
     else:
-        st.warning("No numeric columns for charts.")
+        st.warning("No numeric columns found.")
 
 
-    # ---------------------------------------------------------
-    #  DOWNLOAD REPORT
-    # ---------------------------------------------------------
-    st.subheader("⬇ Download Filtered Report")
-
-    download_df = df.to_csv(index=False).encode()
-    st.download_button("Download CSV", download_df, "report.csv", "text/csv")
-
-
-
-# ---------------------------------------------------------
-#  CHATBOT GEMINI
-# ---------------------------------------------------------
+# --------------------------- GEMINI BOT ---------------------------
 st.sidebar.subheader("🤖 ChatbotGemini")
+ask = st.sidebar.text_input("Ask about your data")
 
-ask_user = st.sidebar.text_input("Ask about your data")
-
-if ask_user and df is not None:
-
-    prompt = f"""
-    You are a premium data assistant.
-    Dataset sample:
-    {df.head(20).to_string()}
-    User Question: {ask_user}
-    Provide a professional, human-like insight.
-    """
-
+if ask and df is not None:
+    prompt = f"Dataset: {df.head(10).to_string()}\nUser question: {ask}"
     ans = ai.models.generate_content(model="gemini-1.5-flash", contents=prompt)
-
     st.sidebar.info(ans.text)
