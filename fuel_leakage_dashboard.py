@@ -1,510 +1,239 @@
-Perfect.
-Model confirmed:
-
-model = "gemini-2.0-flash"
-
-This is fast + powerful → best for dashboards, analytics, summaries, fraud detection.
-
-
----
-
-I will now generate your FULL PREMIUM AI DASHBOARD CODE
-
-I will send it in 5 clean parts so it never breaks.
-
-
----
-
-✅ PART 1 — CORE IMPORTS + CONFIG + BASIC HELPERS
-
-(Copy & paste this into the TOP of your app.py or fuel_dashboard.py)
-
-
----
-
-✅ PART-1 CODE (START HERE)
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import re
 from supabase import create_client, Client
 import google.generativeai as genai
 
-# ===============================================================
-# 🔐 CONFIGURATION (Supabase + Gemini 2.0 Flash)
-# ===============================================================
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-GEMINI_KEY = st.secrets["GEMINI_API_KEY"]
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
-genai.configure(api_key=GEMINI_KEY)
-gmodel = genai.GenerativeModel("gemini-2.0-flash")
+MODEL_NAME = "gemini-2.0-flash"
+model = genai.GenerativeModel(MODEL_NAME)
 
-# ===============================================================
-# 🔧 HELPER — CLEAN COLUMN NAME
-# ===============================================================
-def clean_col(c):
-    c = str(c).strip().lower()
-    c = c.replace(" ", "_")
-    c = c.replace("-", "_")
-    c = re.sub(r'[^a-zA-Z0-9_]', '', c)
-    return c
 
-# ===============================================================
-# 🔧 HELPER — SEMANTIC COLUMN MATCHING
-# ===============================================================
-def find_semantic_column(df, possible_names):
-    df_cols = [clean_col(c) for c in df.columns]
-
-    for name in possible_names:
-        name = clean_col(name)
-        for col in df_cols:
-            if name in col:
-                return df.columns[df_cols.index(col)]
-
-    return None
-
-# ===============================================================
-# 🔧 LOAD SUPABASE TABLE (AUTO-DETECT)
-# ===============================================================
-def load_table(table):
+# ============================================================
+# LOAD DATA FROM SUPABASE
+# ============================================================
+def load_table(table_name):
     try:
-        data = supabase.table(table).select("*").execute()
+        data = supabase.table(table_name).select("*").execute()
         return pd.DataFrame(data.data)
-    except Exception as e:
-        st.error(f"Error loading table {table}: {e}")
+    except:
         return pd.DataFrame()
 
 
----
-
-✔ DONE — PART 1 READY
-
-Next:
-
-👉 PART 2 = SEMANTIC COLUMN ENGINE
-
-(Automatically detect “transaction_id”, “volume”, “rate”, “amount”, “vehicle”, “station”, “date”, etc.)
-
-👉 PART 3 = Filler Transformation + Header Detection
-
-(Remove top metadata lines like your Excel 9th-row issue.)
-
-👉 PART 4 = All Dashboards (Fuel, Trip, Vehicle, Maintenance)
-
-👉 PART 5 = Gemini AI Engine + Leakage + Fraud + Chatbot + UI Layout
-
-
----
-
-🟦 Please reply:
-
-“Send Part 2”
-# ===============================================================
-# 🧠 SEMANTIC COLUMN MAPPING ENGINE
-# ===============================================================
-
-def semantic_map_columns(df):
-
-    col_map = {}
-
-    # Clean all column names first
-    cleaned = {clean_col(c): c for c in df.columns}
-
-    # ------------ Transaction ID ------------
-    col_map["transaction_id"] = find_semantic_column(df, [
-        "transaction_id", "txn_id", "trans_id", "transaction", "txn"
-    ])
-
-    # ------------ Vehicle Number ------------
-    col_map["vehicle_no"] = find_semantic_column(df, [
-        "vehicle_no", "truck_no", "vehicle", "truck_number", "truck"
-    ])
-
-    # ------------ Product Volume (Liters) ------------
-    col_map["volume_ltr"] = find_semantic_column(df, [
-        "product_volume", "volume", "fuel_liters", "liters", "qty", "quantity", "ltr"
-    ])
-
-    # ------------ Rate Per Liter ------------
-    col_map["rate"] = find_semantic_column(df, [
-        "rate", "price_per_liter", "fuel_rate", "rate_rs_ltr", "fuel_price"
-    ])
-
-    # ------------ Total Amount ------------
-    col_map["amount"] = find_semantic_column(df, [
-        "purchase_amount", "amount", "total_amount", "value", "price"
-    ])
-
-    # ------------ Date Column ------------
-    col_map["date"] = find_semantic_column(df, [
-        "date", "transaction_date", "fuel_date"
-    ])
-
-    # ------------ Time Column ------------
-    col_map["time"] = find_semantic_column(df, [
-        "time", "transaction_time", "fuel_time"
-    ])
-
-    # ------------ Fuel Station ID ------------
-    col_map["station_id"] = find_semantic_column(df, [
-        "station_id", "fuel_station_id", "fuelstation", "petrol_pump", "pump_id"
-    ])
-
-    # ------------ Driver ID ------------
-    col_map["driver_id"] = find_semantic_column(df, [
-        "driver_id", "driver", "drv_id"
-    ])
-
-    # ------------ Distance ------------
-    col_map["distance"] = find_semantic_column(df, [
-        "distance_km", "distance", "km"
-    ])
-
-    # ------------ Fuel Efficiency ------------
-    col_map["mileage"] = find_semantic_column(df, [
-        "mileage", "kmpl", "fuel_efficiency"
-    ])
-
-    return col_map
-    # ===============================================================
-# 🧹 FILLER TRANSFORMATION ENGINE — CATCH ANY BAD EXCEL/CSV
-# ===============================================================
-
-def detect_header_row(df_raw):
-    """
-    Detect which row contains the actual header.
-    Looks for row that contains the highest % of text-like column names.
-    Useful when Excel has metadata lines (1-9).
-    """
-
-    best_row = 0
-    best_score = 0
-
-    for i in range(min(15, len(df_raw))):
-        row = list(df_raw.iloc[i])
-        score = 0
-        for cell in row:
-            cell_str = str(cell).lower()
-
-            # Typical header patterns
-            if any(x in cell_str for x in [
-                "transaction", "txn", "amount", "rate", "volume",
-                "date", "vehicle", "station", "id", "s.no"
-            ]):
-                score += 1
-
-        if score > best_score:
-            best_score = score
-            best_row = i
-
-    return best_row
-
-
-def clean_uploaded_file(uploaded):
-    """Reads CSV/XLSX with FULL cleaning pipeline."""
-
-    # --------------------------------------------------------
-    # 1. Read file WITHOUT assuming header
-    # --------------------------------------------------------
-    if uploaded.name.endswith(".csv"):
-        df_raw = pd.read_csv(uploaded, header=None)
-    else:
-        df_raw = pd.read_excel(uploaded, header=None)
-
-    # --------------------------------------------------------
-    # 2. Detect header row automatically
-    # --------------------------------------------------------
-    header_row = detect_header_row(df_raw)
-
-    # --------------------------------------------------------
-    # 3. Re-read file using detected header
-    # --------------------------------------------------------
-    if uploaded.name.endswith(".csv"):
-        df = pd.read_csv(uploaded, skiprows=header_row)
-    else:
-        df = pd.read_excel(uploaded, skiprows=header_row)
-
-    # --------------------------------------------------------
-    # 4. Standard cleaning
-    # --------------------------------------------------------
-    df = df.dropna(how="all")  # remove empty rows
-    df.columns = [str(c).strip() for c in df.columns]  # clean names
-
-    # --------------------------------------------------------
-    # 5. Apply semantic column mapping (from PART-2)
-    # --------------------------------------------------------
-# ===============================================================
-# 🚚 TRUCK INTELLIGENCE ENGINE — Performance, Leakage, Ranking
-# ===============================================================
-
-def compute_truck_metrics(df):
-    """
-    Computes advanced analytics truck-wise.
-    Works even if column names are different → semantic mapping (Part 2).
-    """
-
-    # Important semantic-friendly fields (Part 2 created these):
-    col_vehicle = "vehicle_number"
-    col_volume  = "product_volume"
-    col_amount  = "purchase_amount"
-    col_rate    = "rate_rs_ltr"
-    col_date    = "transaction_date"
-
-    # Check required fields
-    required = [col_vehicle, col_volume, col_amount, col_rate]
-    if not all(col in df.columns for col in required):
-        return None
-
-    # Create clean working DF
-    clean = df.copy()
-    clean[col_volume] = pd.to_numeric(clean[col_volume], errors="coerce").fillna(0)
-    clean[col_amount] = pd.to_numeric(clean[col_amount], errors="coerce").fillna(0)
-    clean[col_rate]   = pd.to_numeric(clean[col_rate], errors="coerce").fillna(0)
-
-    # Compute expected cost
-    clean["expected_cost"] = clean[col_volume] * clean[col_rate]
-    clean["leakage_diff"] = clean[col_amount] - clean["expected_cost"]
-
-    # Percentage leakage
-    clean["leakage_percent"] = (clean["leakage_diff"] / clean["expected_cost"]) * 100
-
-    # Group truck-wise
-    truck_summary = clean.groupby(col_vehicle).agg({
-        col_volume: "sum",
-        col_amount: "sum",
-        "expected_cost": "sum",
-        "leakage_diff": "sum",
-        "leakage_percent": "mean"
-    }).reset_index()
-
-    # Rename for UI clarity
-    truck_summary.columns = [
-        "vehicle_number",
-        "total_volume",
-        "total_amount_spent",
-        "expected_cost",
-        "total_leakage_amount",
-        "avg_leakage_percent"
-    ]
-
-    # Efficiency score (0–100)
-    truck_summary["efficiency_score"] = np.clip(
-        100 - np.abs(truck_summary["avg_leakage_percent"]), 
-        0, 100
-    )
-
-    # Flagging
-    truck_summary["status"] = np.where(
-        truck_summary["avg_leakage_percent"] > 8,
-        "⚠ High Leakage",
-        "✔ Normal"
-    )
-
-    return truck_summary
-
-
-# ===============================================================
-# 🧠 AI TRUCK SUMMARY GENERATOR
-# ===============================================================
-
-def ai_truck_summary(truck_df, vehicle_number):
-    """
-    Creates human-style summary for ONE truck.
-    """
-
-    row = truck_df[truck_df["vehicle_number"] == vehicle_number].iloc[0].to_dict()
-
-    prompt = f"""
-    You are a transport company fuel expert.
-
-    Create a clear summary for this truck:
-
-    {row}
-
-    Include:
-    - Fuel usage behavior
-    - Leakage probability
-    - Efficiency score meaning
-    - Whether station overcharging is possible
-    - Advice to reduce cost
-    """
-
+# ============================================================
+# AI FUNCTIONS
+# ============================================================
+def ai_text(prompt):
     try:
-        result = model.generate_content(prompt).text
+        response = model.generate_content(prompt)
+        return response.text
     except:
-        result = "AI summary unavailable."
-
-    return result
-    # ===========================================================
-# ⭐ PART–5: PREMIUM UI (Tabs + Theme + Cards + Integration)
-# ===========================================================
-
-st.markdown("""
-<style>
-.big-metric {font-size:28px; font-weight:700; margin-top:-10px;}
-.subtext {font-size:13px; color:gray;}
-.card {
-    background-color:#ffffff10;
-    padding:18px;
-    border-radius:12px;
-    border:1px solid #ffffff20;
-    margin-bottom:10px;
-}
-</style>
-""", unsafe_allow_html=True)
+        return "AI Error. Please retry."
 
 
-# -----------------------------------------------------------
-# 🌗 THEME TOGGLE
-# -----------------------------------------------------------
-theme = st.sidebar.radio("Theme", ["Light", "Dark"])
+def ai_leakage(df):
+    required = ["Product Volume", "Rate (Rs./ Ltr)", "Purchase Amount"]
 
-if theme == "Dark":
-    st.markdown("""
-    <style>
-    body {background-color:#0e1117; color:white;}
-    </style>
-    """, unsafe_allow_html=True)
+    if not all(col in df.columns for col in required):
+        return None, "Required fields missing"
 
+    df["Expected"] = df["Product Volume"] * df["Rate (Rs./ Ltr)"]
+    df["Variance"] = df["Purchase Amount"] - df["Expected"]
+    df["Leak Percent"] = (df["Variance"] / df["Expected"]) * 100
 
-# -----------------------------------------------------------
-# 🗂️ TABS
-# -----------------------------------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "🏠 Home",
-    "📦 Supabase Data",
-    "🚚 Truck Intelligence",
-    "⛽ Leakage Detection",
-    "🔍 Fraud Detection",
-    "📈 Charts Builder",
-    "🤖 Chatbot Gemini"
-])
+    text = ai_text(
+        f"Analyze fuel leakage patterns and give summary. Data: {df.to_dict()}"
+    )
+
+    return df, text
 
 
-# ===========================================================
-# 1️⃣ HOME TAB
-# ===========================================================
-with tab1:
-    st.title("🚀 Fuel Intelligence Dashboard — Premium Edition")
-    st.write("Your connected Supabase tables, AI analytics, and truck insights in one place.")
-
-    st.subheader("Connected Tables")
-    tables = ["sales_data", "drive_summary", "trip_data"]
-    for t in tables:
-        count = len(load_table(t))
-        st.write(f"✔ **{t}** — {count} rows")
+def ai_transaction_summary(row):
+    return ai_text(
+        f"Explain this transaction in simple language: {row.to_dict()}"
+    )
 
 
-# ===========================================================
-# 2️⃣ SUPABASE DATA PREVIEW TAB
-# ===========================================================
-with tab2:
-    st.header("📦 Live Supabase Tables")
-    selected_table = st.selectbox("Select Table", ["sales_data", "drive_summary", "trip_data"])
-
-    table_df = load_table(selected_table)
-
-    if table_df.empty:
-        st.error("No data fetched.")
-    else:
-        st.dataframe(table_df, use_container_width=True)
+def ai_fraud(df):
+    return ai_text(
+        f"Detect fraud, duplicate entries, abnormal fuel usage, high prices. Data: {df.to_dict()}"
+    )
 
 
-# ===========================================================
-# 3️⃣ TRUCK INTELLIGENCE TAB
-# ===========================================================
-with tab3:
-    st.header("🚚 Truck Intelligence Center")
-
-    df = load_table("sales_data")
-    truck_df = compute_truck_metrics(df)
-
-    if truck_df is None:
-        st.error("Truck metrics could not be computed. Missing fuel columns.")
-    else:
-        st.subheader("📊 Truck Ranking Table")
-        st.dataframe(truck_df, use_container_width=True)
-
-        selected_truck = st.selectbox(
-            "Select Vehicle Number", 
-            truck_df["vehicle_number"].astype(str).unique()
-        )
-
-        if selected_truck:
-            st.subheader("🧠 AI Summary for Truck")
-            summary = ai_truck_summary(truck_df, selected_truck)
-            st.info(summary)
+def ai_monthly(df):
+    return ai_text(
+        f"Give a clean monthly summary of fuel usage, cost, station performance, vehicle efficiency. Data: {df.to_dict()}"
+    )
 
 
-# ===========================================================
-# 4️⃣ LEAKAGE DETECTION TAB
-# ===========================================================
-with tab4:
-    st.header("⛽ Fuel Leakage Detection (AI Powered)")
+def ai_chat(question, df):
+    return ai_text(
+        f"You are a fuel analytics expert. Use only this dataset to answer: {df.to_dict()}. Question: {question}"
+    )
 
-    leak_df, leak_summary = detect_leakage(df)
 
-    if leak_df is None:
-        st.error("Required columns missing.")
-    else:
-        st.subheader("Leakage Calculated Table")
-        st.dataframe(leak_df, use_container_width=True)
+# ============================================================
+# UI START
+# ============================================================
+
+st.set_page_config(page_title="Fuel Intelligence Dashboard", layout="wide")
+
+st.title("Fuel Intelligence Dashboard (Premium Edition)")
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.title("Data Controls")
+
+table_name = st.sidebar.selectbox(
+    "Select Supabase Table",
+    ["sales_data", "drive_summary", "trip_data"]
+)
+
+df = load_table(table_name)
+
+if df.empty:
+    st.error("No data found in selected table.")
+    st.stop()
+
+st.sidebar.success(f"Loaded {len(df)} rows")
+
+
+# ============================================================
+# SECTION 1 — TRANSACTION LOOKUP
+# ============================================================
+
+st.header("Transaction Lookup")
+
+txn_field = None
+for c in df.columns:
+    if "transaction" in c.lower():
+        txn_field = c
+
+if txn_field:
+    txn_id = st.selectbox("Select Transaction ID", df[txn_field].astype(str).unique())
+
+    if txn_id:
+        row = df[df[txn_field].astype(str) == txn_id].iloc[0]
+        st.subheader("Transaction Details")
+        st.dataframe(pd.DataFrame([row]), use_container_width=True)
 
         st.subheader("AI Summary")
-        st.warning(leak_summary)
+        st.info(ai_transaction_summary(row))
 
 
-# ===========================================================
-# 5️⃣ FRAUD DETECTION TAB
-# ===========================================================
-with tab5:
-    st.header("🔍 Fraud & Misuse Detection")
+# ============================================================
+# SECTION 2 — QUICK STATS
+# ============================================================
 
-    fraud_text = detect_fraud(df)
-    st.warning(fraud_text)
+st.header("Quick Statistics")
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Rows", len(df))
+col2.metric("Numeric Columns", len(df.select_dtypes(include=["int64", "float64"]).columns))
+col3.metric("Unique Vehicles", df["Vehicle Number"].nunique() if "Vehicle Number" in df.columns else 0)
 
 
-# ===========================================================
-# 6️⃣ CHART BUILDER TAB
-# ===========================================================
-with tab6:
-    st.header("📈 Charts Builder")
+# ============================================================
+# SECTION 3 — FUEL LEAKAGE ANALYSIS
+# ============================================================
 
-    numerical_cols = df.select_dtypes(include=["float64", "int64"]).columns
+st.header("Fuel Leakage Detection")
 
-    if len(numerical_cols) == 0:
-        st.error("No numeric columns found.")
-    else:
-        col = st.selectbox("Select numeric column", numerical_cols)
-        chart_type = st.radio("Choose Chart", ["Line", "Bar", "Area"])
+leak_df, leak_text = ai_leakage(df)
 
-        if chart_type == "Line":
-            fig = px.line(df, y=col)
-        elif chart_type == "Bar":
-            fig = px.bar(df, y=col)
+if leak_df is not None:
+    st.dataframe(leak_df[["Product Volume", "Rate (Rs./ Ltr)", "Purchase Amount", "Expected", "Leak Percent"]])
+    st.subheader("AI Leakage Result")
+    st.warning(leak_text)
+else:
+    st.error(leak_text)
+
+
+# ============================================================
+# SECTION 4 — MONTHLY SUMMARY
+# ============================================================
+
+st.header("Monthly AI Summary")
+
+st.info(ai_monthly(df))
+
+
+# ============================================================
+# SECTION 5 — FRAUD DETECTION
+# ============================================================
+
+st.header("Fraud & Anomaly Detection")
+
+st.warning(ai_fraud(df))
+
+
+# ============================================================
+# SECTION 6 — VEHICLE LEVEL ANALYTICS
+# ============================================================
+
+st.header("Vehicle Level Analysis")
+
+if "Vehicle Number" in df.columns:
+
+    vehicle = st.selectbox("Select Vehicle", ["All"] + list(df["Vehicle Number"].unique()))
+
+    num_cols = df.select_dtypes(include=["float64", "int64"]).columns
+    metric = st.multiselect("Select Metrics", num_cols)
+
+    if metric:
+
+        if vehicle == "All":
+            fig = px.line(df, x=df.columns[0], y=metric)
         else:
-            fig = px.area(df, y=col)
+            fig = px.line(df[df["Vehicle Number"] == vehicle], x=df.columns[0], y=metric)
 
         st.plotly_chart(fig, use_container_width=True)
 
 
-# ===========================================================
-# 7️⃣ CHATBOT TAB
-# ===========================================================
-with tab7:
-    st.header("🤖 Chatbot Gemini (AI Assistant)")
-    user_q = st.text_input("Ask anything about fuel, trucks, or data:")
+# ============================================================
+# SECTION 7 — CHART BUILDER
+# ============================================================
 
-    if user_q:
-        st.write("### Answer")
-        try:
-            st.success(ask_ai_about_data(user_q, df))
-        except:
-            st.error("AI error — check API key / model.")
+st.header("Chart Builder")
 
-and I will give the next block.
+num_cols = df.select_dtypes(include=["int64", "float64"]).columns
+
+if len(num_cols) > 0:
+    c = st.selectbox("Select Column", num_cols)
+    t = st.radio("Chart Type", ["Line", "Bar", "Area"])
+
+    if t == "Line":
+        fig = px.line(df, y=c)
+    elif t == "Bar":
+        fig = px.bar(df, y=c)
+    else:
+        fig = px.area(df, y=c)
+
+    st.plotly_chart(fig)
+else:
+    st.warning("No numeric fields available")
+
+
+# ============================================================
+# SECTION 8 — AI CHATBOT
+# ============================================================
+
+st.header("AI Assistant")
+
+q = st.text_input("Ask something about your data")
+
+if q:
+    st.success(ai_chat(q, df))
