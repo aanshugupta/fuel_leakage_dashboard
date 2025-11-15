@@ -6,184 +6,176 @@ from supabase import create_client, Client
 import google.generativeai as genai
 import json
 
-# -----------------------------------------------------------
-# LOAD SECRETS
-# -----------------------------------------------------------
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
-SUPABASE_URL = st.secrets.get("SUPABASE_URL")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY")
+# ============================================================
+#                  STREAMLIT SECRETS
+# ============================================================
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-if not GEMINI_API_KEY:
-    st.error("Gemini API key missing!")
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("Supabase credentials missing!")
-
-# -----------------------------------------------------------
-# GEMINI SETUP - MODEL FIXED
-# -----------------------------------------------------------
+# ---------------- Gemini Setup ----------------
 genai.configure(api_key=GEMINI_API_KEY)
-gmodel = genai.GenerativeModel("gemini-2.5-flash")
+gmodel = genai.GenerativeModel("gemini-2.0-flash")
 
-# -----------------------------------------------------------
-# SUPABASE CONNECT
-# -----------------------------------------------------------
+# ---------------- Supabase Setup ----------------
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# -----------------------------------------------------------
-# UI SETTINGS
-# -----------------------------------------------------------
-st.set_page_config(page_title="Sales Transaction Dashboard", layout="wide")
-st.title("📊 Universal Sales Transaction Dashboard")
+# ============================================================
+#                  STREAMLIT UI SETUP
+# ============================================================
+st.set_page_config(page_title="Transaction + Fuel Dashboard", layout="wide")
+st.title("📊 Advanced Transaction Dashboard with AI + Supabase")
 
-# -----------------------------------------------------------
-# SIDEBAR
-# -----------------------------------------------------------
+# ============================================================
+#                  SIDEBAR
+# ============================================================
 st.sidebar.header("📂 Upload File")
-uploaded = st.sidebar.file_uploader("Upload Excel/CSV", type=["csv", "xlsx"])
+uploaded = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
-st.sidebar.write("---")
-st.sidebar.header("🤖 Ask AI (General)")
-side_q = st.sidebar.text_input("Ask here")
+st.sidebar.write("----")
+st.sidebar.header("🤖 Ask AI About Your Data")
+ai_q = st.sidebar.text_input("Ask AI")
 
-if st.sidebar.button("Ask AI"):
+if st.sidebar.button("Ask"):
     try:
-        resp = gmodel.generate_content(side_q)
-        st.sidebar.success(resp.text)
+        ai_ans = gmodel.generate_content(ai_q)
+        st.sidebar.success(ai_ans.text)
     except:
-        st.sidebar.error("AI Error. Check model or API key.")
+        st.sidebar.error("AI error occurred")
 
-# -----------------------------------------------------------
-# WHEN FILE UPLOADED
-# -----------------------------------------------------------
-if uploaded:
+st.sidebar.write("----")
+st.sidebar.header("📁 View Supabase Saved Data")
 
-    # -------------------------------------------------------
-    # READ FILE — SKIP FIRST 9 META ROWS
-    # -------------------------------------------------------
+# READ SAVED DATASETS FROM SUPABASE
+try:
+    supa_rows = supabase.table("trip_data").select("*").execute()
+    supa_df = pd.DataFrame(supa_rows.data)
+
+    if not supa_df.empty:
+        st.sidebar.success(f"{len(supa_df)} records found")
+
+        # Show dropdown for Supabase stored files
+        # we assume trip_id or transaction_id exist
+        id_columns = [c for c in supa_df.columns if "id" in c.lower()]
+
+        if id_columns:
+            main_id = id_columns[0]
+            supa_ids = supa_df[main_id].astype(str).unique().tolist()
+
+            selected_supa_id = st.sidebar.selectbox("Select saved ID from Supabase", supa_ids)
+            st.sidebar.write("Selected record:")
+            st.sidebar.dataframe(supa_df[supa_df[main_id] == selected_supa_id])
+
+    else:
+        st.sidebar.info("No data available in Supabase")
+except:
+    st.sidebar.error("Failed to load Supabase data")
+
+# ============================================================
+#                  FUNCTION → CLEAN FILE
+# ============================================================
+def clean_uploaded_file(file):
     try:
-        if uploaded.name.endswith(".csv"):
-            df = pd.read_csv(uploaded, skiprows=9)
+        if file.name.endswith(".csv"):
+            df = pd.read_csv(file, skiprows=9)
         else:
-            df = pd.read_excel(uploaded, skiprows=9)
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
-        st.stop()
+            df = pd.read_excel(file, skiprows=9)
+    except:
+        df = pd.read_excel(file)
 
-    # -------------------------------------------------------
-    # CLEAN COLUMN NAMES
-    # -------------------------------------------------------
+    # Normalize columns
     df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
 
     rename_map = {
         "sno": "s_no",
         "s.no": "s_no",
         "txn_id": "transaction_id",
+        "transaction": "transaction_id",
         "transactionid": "transaction_id",
-        "transaction id": "transaction_id",
-        "transaction_no": "transaction_id",
+        "fuel_liters": "actual_fuel_liters",
+        "distance": "distance_km",
     }
     df.rename(columns={c: rename_map.get(c, c) for c in df.columns}, inplace=True)
 
-    # -------------------------------------------------------
-    # CHECK TRANSACTION ID COLUMN EXISTS
-    # -------------------------------------------------------
-    txn_col = None
-    for col in df.columns:
-        if "transaction" in col and "id" in col:
-            txn_col = col
-            break
+    return df
 
-    if txn_col is None:
-        st.error("❌ Could not detect 'Transaction ID' column!")
-        st.stop()
 
-    df.rename(columns={txn_col: "transaction_id"}, inplace=True)
+# ============================================================
+#          MAIN DASHBOARD (FILE UPLOADED)
+# ============================================================
+if uploaded:
 
-    st.success("✔ Transaction ID detected")
+    df = clean_uploaded_file(uploaded)
 
-    # -------------------------------------------------------
-    # SHOW CLEANED TABLE
-    # -------------------------------------------------------
-    st.subheader("🧾 Processed Table")
-    st.dataframe(df, use_container_width=True)
+    st.subheader("📌 Cleaned file preview:")
+    st.dataframe(df.head(20))
 
-    st.write("---")
-
-    # -------------------------------------------------------
-    # SUPABASE UPLOAD
-    # -------------------------------------------------------
-    if st.button("⬆ Upload Data to Supabase"):
+    # save to supabase
+    if st.button("Upload this file to Supabase"):
         try:
-            clean = df.replace({np.nan: None}).to_dict(orient="records")
-            supabase.table("sales_data").insert(clean).execute()
-            st.success("🎉 Upload Successful!")
+            records = df.replace({np.nan: None}).to_dict(orient="records")
+            supabase.table("trip_data").insert(records).execute()
+            st.success("File saved inside Supabase!")
         except Exception as e:
             st.error(str(e))
 
-    st.write("---")
+    st.write("----")
 
-    # -------------------------------------------------------
-    # SEARCH BY TRANSACTION ID
-    # -------------------------------------------------------
-    st.header("🔍 Search Transaction")
+    # PICK TRANSACTION ID COLUMN
+    id_cols = [c for c in df.columns if "id" in c]
+    if id_cols:
+        id_col = id_cols[0]
 
-    txn_list = df["transaction_id"].dropna().astype(str).unique().tolist()
-    selected_id = st.selectbox("Select Transaction ID", txn_list)
+        st.subheader("🔍 Search by Transaction ID")
+        txn = st.selectbox("Select Transaction ID", df[id_col].unique().astype(str))
 
-    if selected_id:
-        st.subheader("📌 Transaction Detail")
-        result = df[df["transaction_id"] == selected_id]
-        st.dataframe(result, use_container_width=True)
+        # show detail
+        detail = df[df[id_col].astype(str) == txn]
+        st.dataframe(detail)
 
-    st.write("---")
+    st.write("----")
 
-    # -------------------------------------------------------
-    # CHARTS SECTION
-    # -------------------------------------------------------
-    st.header("📈 Charts")
+    # ============================
+    # GRAPHS
+    # ============================
+    st.subheader("📈 Charts")
 
-    numeric_cols = df.select_dtypes(include=["int64", "float64"]).columns.tolist()
+    numeric_cols = df.select_dtypes(include=["int", "float"]).columns.tolist()
     if numeric_cols:
-        chosen = st.selectbox("Select column for Pie Chart", numeric_cols)
-        pie = df[chosen].value_counts().reset_index()
-        pie.columns = ["Value", "Count"]
-        fig = px.pie(pie, values="Count", names="Value", title=f"{chosen} Distribution")
-        st.plotly_chart(fig, use_container_width=True)
+        col = st.selectbox("Choose column for Pie Chart", numeric_cols)
+        pie_data = df[col].value_counts().reset_index()
+        pie_data.columns = ["value", "count"]
+
+        pie = px.pie(pie_data, values="count", names="value", title=f"{col} distribution")
+        st.plotly_chart(pie, use_container_width=True)
     else:
-        st.warning("No numeric columns found for charts")
+        st.warning("No numeric columns!")
 
-    st.write("---")
+    # ============================
+    # AI INSIGHTS
+    # ============================
+    st.write("----")
+    st.header("🤖 AI Insights")
 
-    # -------------------------------------------------------
-    # AI INSIGHTS BASED ON FILE DATA (FIXED PROMPT)
-    # -------------------------------------------------------
-    st.header("🤖 AI Insights on Uploaded Data")
+    q = st.text_input("Ask anything about your uploaded file")
 
-    user_q = st.text_input("Ask something like: 'Which transaction has max amount?'")
-
-    if st.button("Get AI Insights"):
-
-        # FULL DATA SUMMARY SENT TO AI
-        preview = df.to_dict(orient="records")
+    if st.button("AI Answer"):
+        preview = df.head(10).to_dict(orient="records")
 
         prompt = f"""
-        You are a data expert. 
-        Answer ONLY using the data provided below.
-        Do NOT ask the user again for more context.
-
-        Here is the dataset:
+        You are data expert.
+        Here is sample data:
         {json.dumps(preview, indent=2)}
 
-        User question: {user_q}
-
-        Give clear, correct answer based strictly on this dataset.
+        User question:
+        {q}
         """
 
         try:
-            out = gmodel.generate_content(prompt)
-            st.success(out.text)
-        except Exception as e:
-            st.error(str(e))
+            ai = gmodel.generate_content(prompt)
+            st.success(ai.text)
+        except:
+            st.error("AI failed to process")
 
 else:
-    st.info("Upload a file to begin.")
+    st.info("Upload any CSV or Excel file to begin.")
