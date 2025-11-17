@@ -1,282 +1,255 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
-from supabase import create_client
+from supabase import create_client, Client
 import google.generativeai as genai
+import numpy as np
 
-# =========================
+# ------------------------------------------------------------
 # CONFIG
-# =========================
+# ------------------------------------------------------------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 
 MODEL = "gemini-2.0-flash"
 model = genai.GenerativeModel(MODEL)
 
 
-# =========================
-# LOAD DATA FROM SUPABASE
-# =========================
-def load_table(table_name):
+# ------------------------------------------------------------
+# HELPER → semantic column finder
+# ------------------------------------------------------------
+def find_column(df, keywords):
+    keywords = [k.lower() for k in keywords]
+    for col in df.columns:
+        name = col.lower().replace(" ", "").replace("_", "")
+        for k in keywords:
+            if k in name:
+                return col
+    return None
+
+
+# ------------------------------------------------------------
+# LOAD FROM SUPABASE
+# ------------------------------------------------------------
+def load_table(table):
     try:
-        res = supabase.table(table_name).select("*").execute()
+        res = supabase.table(table).select("*").execute()
         return pd.DataFrame(res.data)
-    except Exception as e:
-        st.error(f"Supabase error: {e}")
+    except:
         return pd.DataFrame()
 
 
-# =========================
-# SAFE AI PROMPT HANDLER
-# =========================
-def safe_ai_request(prompt):
-    try:
-        return model.generate_content(prompt).text
-    except Exception:
-        return "⚠ The AI model could not process full data. Try asking a shorter question."
+# ------------------------------------------------------------
+# AI FUNCTIONS
+# ------------------------------------------------------------
+def ai_answer(prompt):
+    return model.generate_content(prompt).text
 
 
-# =========================
-# AI LEAKAGE DETECTION
-# =========================
-def ai_leakage(df):
-    req = ["product_volume", "rate", "purchase_amount"]
-
-    if not all(col in df.columns for col in req):
-        return None, "Required columns missing."
-
-    df["expected"] = df["product_volume"] * df["rate"]
-    df["diff"] = df["purchase_amount"] - df["expected"]
-    df["leak_pct"] = np.where(df["expected"] == 0, 0,
-                              (df["diff"] / df["expected"]) * 100)
-
-    sample = df.head(50).to_json()
-
-    prompt = f"""
-    Analyze leakage patterns from fuel transaction sample:
-    {sample}
-
-    Give:
-    • Any leakage alerts  
-    • Overcharging patterns  
-    • Suspicious transactions  
-    """
-    ans = safe_ai_request(prompt)
-    return df, ans
+def ai_explain_transaction(row):
+    prompt = f"Explain this fuel transaction for a non-technical user:\n{row.to_dict()}"
+    return ai_answer(prompt)
 
 
-# =========================
-# AI TRANSACTION EXPLAINER
-# =========================
-def ai_explain(row):
-    prompt = f"""
-    Explain this fuel transaction in simple language:
-    {row.to_dict()}
-    """
-    return safe_ai_request(prompt)
-
-
-# =========================
-# AI FRAUD DETECTION
-# =========================
 def ai_fraud(df):
-    sample = df.head(80).to_json()
-
-    prompt = f"""
-    Detect fraud, anomalies, duplicate records, abnormal amounts.
-    Data sample:
-    {sample}
-    """
-    return safe_ai_request(prompt)
+    prompt = f"Detect fraud patterns, duplicate transactions, misuse, pricing anomalies:\n{df.to_dict()}"
+    return ai_answer(prompt)
 
 
-# =========================
-# AI MONTHLY SUMMARY
-# =========================
 def ai_summary(df):
-    sample = df.head(100).to_json()
+    prompt = f"Give a clean monthly summary:\n{df.to_dict()}"
+    return ai_answer(prompt)
 
+
+def ai_leakage(df):
+    qty = find_column(df, ["volume", "qty", "litre", "quantity"])
+    rate = find_column(df, ["rate", "price"])
+    amt = find_column(df, ["amount", "purchase", "total_transaction"])
+
+    if not qty or not rate or not amt:
+        return None, "Required columns not found."
+
+    df["expected"] = df[qty] * df[rate]
+    df["diff"] = df[amt] - df["expected"]
+    df["leak_pct"] = (df["diff"] / df["expected"]) * 100
+
+    prompt = f"Analyze leakage and abnormalities:\n{df.to_dict()}"
+    return df, ai_answer(prompt)
+
+
+def ai_chart_explain(df, column):
     prompt = f"""
-    Create a clear monthly summary for non-technical users.
-    Include:
-    • Total fuel usage  
-    • High/low spending  
-    • Best performing vehicles  
-    • Any red flags  
-
-    Data:
-    {sample}
+    Explain this chart in very simple words for a non-technical person.
+    Column: {column}
+    Data sample: {df[column].head().to_list()}
     """
-    return safe_ai_request(prompt)
+    return ai_answer(prompt)
 
 
-# =========================
-# AI CHATBOT
-# =========================
-def ai_chat(q, df):
-    sample = df.head(120).to_json()
-
-    prompt = f"""
-    You are an expert fuel data analyst.  
-    Answer the question using ONLY this dataset sample:
-
-    {sample}
-
-    Question: {q}
-    """
-    return safe_ai_request(prompt)
+def ai_chat(question, df):
+    prompt = f"Dataset:\n{df.to_dict()}\nAnswer this: {question}"
+    return ai_answer(prompt)
 
 
-# =========================
-# UI STARTS
-# =========================
-st.title("⛽ Fuel Intelligence Dashboard — Premium Pack")
+# ------------------------------------------------------------
+# BEAUTIFUL UI THEME
+# ------------------------------------------------------------
+st.set_page_config(
+    page_title="Fuel Dashboard",
+    layout="wide",
+    page_icon="⛽"
+)
+
+st.markdown("""
+<style>
+/* Sidebar beautify */
+[data-testid="stSidebar"] {
+    background-color: #082F49;
+    padding: 20px;
+}
+
+h1, h2, h3 {
+    font-family: 'Segoe UI', sans-serif;
+}
+
+/* Card style */
+.card {
+    padding: 15px;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0px 2px 8px rgba(0,0,0,0.1);
+    margin-bottom: 15px;
+}
+</style>
+""", unsafe_allow_html=True)
 
 
-# --------------------
-# DATA CONTROLS
-# --------------------
-st.sidebar.header("📦 Data Controls")
+# ------------------------------------------------------------
+# SIDEBAR
+# ------------------------------------------------------------
+st.sidebar.title("📦 Data Controls")
 
-table_sel = st.sidebar.selectbox("Select Supabase Table", ["sales_data", "trip_data"])
-df_supabase = load_table(table_sel)
+table = st.sidebar.selectbox(
+    "Choose Supabase Table",
+    ["sales_data", "trip_data"]
+)
 
+df_supabase = load_table(table)
 st.sidebar.success(f"Loaded {len(df_supabase)} rows")
 
 
-# --------------------
-# FILE UPLOAD
-# --------------------
-st.sidebar.header("📤 Upload CSV / Excel (NEW)")
+# Upload section
+st.sidebar.markdown("### 📤 Upload CSV / Excel (Optional)")
+uploaded = st.sidebar.file_uploader("Upload file", type=["csv", "xlsx"])
+df_uploaded = None
 
-upload = st.sidebar.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
-
-df_file = None
-if upload:
-    if upload.name.endswith(".csv"):
-        df_file = pd.read_csv(upload)
+if uploaded:
+    if uploaded.name.endswith(".csv"):
+        df_uploaded = pd.read_csv(uploaded)
     else:
-        df_file = pd.read_excel(upload)
-    st.sidebar.success(f"Uploaded {upload.name} — {len(df_file)} rows")
+        df_uploaded = pd.read_excel(uploaded)
+    st.sidebar.success(f"Uploaded {len(df_uploaded)} rows")
 
 
-# --------------------
-# SELECT DATA SOURCE
-# --------------------
-if df_file is not None:
-    df = df_file.copy()
-    st.info("Using **Uploaded File**")
-else:
-    df = df_supabase.copy()
-    st.info("Using **Supabase Table**")
+# ------------------------------------------------------------
+# PRIORITY: Uploaded → Supabase
+# ------------------------------------------------------------
+df = df_uploaded if df_uploaded is not None else df_supabase
+source = "Uploaded File" if df_uploaded is not None else "Supabase"
+
+st.markdown(f"### 📌 Using Data Source: **{source}**")
 
 
-# CONVERT numeric columns
-for col in df.columns:
-    try:
-        df[col] = pd.to_numeric(df[col], errors="ignore")
-    except:
-        pass
+# ------------------------------------------------------------
+# SECTION: Data Preview
+# ------------------------------------------------------------
+st.markdown("## 📋 Data Preview")
+st.dataframe(df.head(), use_container_width=True)
 
 
-# --------------------
-# DATA PREVIEW
-# --------------------
-st.subheader("📋 Data Preview")
-st.dataframe(df.head(50))
-
-
-# --------------------
+# ------------------------------------------------------------
 # TRANSACTION LOOKUP
-# --------------------
-st.subheader("🔍 Transaction Lookup")
+# ------------------------------------------------------------
+st.markdown("## 🔍 Transaction Lookup")
 
-txn_col = None
-for c in df.columns:
-    if "transaction" in c.lower() and "id" in c.lower():
-        txn_col = c
-        break
-
+txn_col = find_column(df, ["transactionid", "txn"])
 if txn_col:
-    txn = st.selectbox("Select Transaction ID", df[txn_col].astype(str).unique())
-    row = df[df[txn_col].astype(str) == txn].iloc[0]
+    txn_id = st.selectbox("Select Transaction ID", df[txn_col].astype(str).unique())
+    row = df[df[txn_col].astype(str) == txn_id].iloc[0]
 
-    st.write("### Transaction Details")
-    st.dataframe(pd.DataFrame([row]))
+    st.markdown("#### Selected Transaction Details")
+    st.dataframe(pd.DataFrame([row]), use_container_width=True)
 
-    st.write("### 🧠 AI Explanation")
-    st.info(ai_explain(row))
+    st.markdown("#### 🤖 AI Explanation")
+    st.info(ai_explain_transaction(row))
+else:
+    st.warning("No Transaction ID column found.")
 
 
-# --------------------
+# ------------------------------------------------------------
 # QUICK STATS
-# --------------------
-st.subheader("📊 Quick Stats")
+# ------------------------------------------------------------
+st.markdown("## 📊 Quick Stats")
 
-st.metric("Rows", len(df))
-st.metric("Numeric Columns", len(df.select_dtypes(include=["int64", "float64"]).columns))
+col1, col2 = st.columns(2)
+col1.metric("Total Rows", len(df))
+col2.metric("Numeric Columns", len(df.select_dtypes(include='number').columns))
 
 
-# --------------------
+# ------------------------------------------------------------
 # LEAKAGE DETECTION
-# --------------------
-st.subheader("🚨 AI Leakage Detection")
+# ------------------------------------------------------------
+st.markdown("## 🚨 Leakage Detection (AI)")
 
-leak_df, text = ai_leakage(df)
+leak_df, leak_text = ai_leakage(df)
 
 if leak_df is not None:
-    st.dataframe(leak_df[["product_volume", "rate", "purchase_amount", "leak_pct"]])
-    st.error(text)
+    st.dataframe(leak_df[["expected", "diff", "leak_pct"]].head())
+    st.error(leak_text)
 else:
-    st.warning(text)
+    st.warning(leak_text)
 
 
-# --------------------
-# FRAUD ANALYSIS
-# --------------------
-st.subheader("🕵️ Fraud Detection")
+# ------------------------------------------------------------
+# FRAUD DETECTION
+# ------------------------------------------------------------
+st.markdown("## 🕵️ Fraud Detection")
 st.warning(ai_fraud(df))
 
 
-# --------------------
+# ------------------------------------------------------------
 # MONTHLY SUMMARY
-# --------------------
-st.subheader("🗓 Monthly Summary (AI)")
+# ------------------------------------------------------------
+st.markdown("## 🗓 Monthly Summary (AI)")
 st.info(ai_summary(df))
 
 
-# --------------------
-# CHART BUILDER
-# --------------------
-st.subheader("📈 Simple Charts (Easy to Understand)")
+# ------------------------------------------------------------
+# CHART + AI EXPLANATION
+# ------------------------------------------------------------
+st.markdown("## 📈 Chart Builder + AI Explanation")
 
-num_cols = df.select_dtypes(include=["int64", "float64"]).columns
+num_cols = df.select_dtypes(include="number").columns
 
 if len(num_cols) > 0:
-    col_sel = st.selectbox("Choose Numeric Column", num_cols)
-    chart_t = st.radio("Chart Type", ["Line", "Bar", "Area"])
-
-    if chart_t == "Line":
-        fig = px.line(df, y=col_sel)
-    elif chart_t == "Bar":
-        fig = px.bar(df, y=col_sel)
-    else:
-        fig = px.area(df, y=col_sel)
-
+    selected = st.selectbox("Choose Column", num_cols)
+    fig = px.line(df, y=selected, title=f"Chart of {selected}")
     st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("#### 🤖 AI Explanation of Chart")
+    st.success(ai_chart_explain(df, selected))
 else:
-    st.warning("No numeric columns available.")
+    st.warning("No numeric columns for charts.")
 
 
-# --------------------
-# AI CHATBOT
-# --------------------
-st.subheader("🤖 AI Assistant (Ask Anything)")
+# ------------------------------------------------------------
+# AI ASSISTANT (Placed BELOW upload section)
+# ------------------------------------------------------------
+st.markdown("## 🤖 AI Assistant (Ask Anything)")
 
 q = st.text_input("Ask something about your data…")
 
